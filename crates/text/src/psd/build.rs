@@ -876,7 +876,7 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
     // One paragraph run per paragraph, as Photoshop writes them: a run spanning a break (the
     // model joins neighbouring paragraphs of one style) made Photoshop lay the paragraphs out as
     // one line. Each takes the style of the run its paragraph starts in; the last also covers the
-    // closing `` (an empty last paragraph is that `` alone).
+    // closing `\r` (an empty last paragraph is that `\r` alone).
     let mut starts = Vec::with_capacity(paras.len());
     let mut at = 0usize;
     for p in &paras {
@@ -886,11 +886,11 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
     let style_at = |byte: usize| starts.iter().rev().find(|(s, _)| *s <= byte).or(starts.first()).map(|(_, st)| *st);
     let mut pieces: Vec<(usize, &str)> = Vec::new();
     let mut from = 0usize;
-    for piece in text.split_inclusive('') {
+    for piece in text.split_inclusive('\r') {
         pieces.push((from, piece));
         from += piece.len();
     }
-    if text.is_empty() || text.ends_with('') {
+    if text.is_empty() || text.ends_with('\r') {
         pieces.push((text.len(), ""));
     }
     let mut pruns = Vec::new();
