@@ -156,7 +156,8 @@ fn release_with_a_path_that_is_not_finite_is_an_error() {
 fn area_type_saves_to_psd_as_photoshop_area_type() {
     let mut s = session(8);
     text_layer(&mut s, WORDS);
-    set_work_path(&mut s, Path::new(vec![Subpath::polygon(&[(100.0, 100.0), (300.0, 100.0), (300.0, 250.0), (100.0, 250.0)])]));
+    // A triangle (a rectangle would read back as the text box it is).
+    set_work_path(&mut s, Path::new(vec![Subpath::polygon(&[(100.0, 100.0), (300.0, 100.0), (200.0, 250.0)])]));
     s.execute("type.fillPath", json!({})).unwrap();
     let doc = s.active().unwrap().doc.clone();
     let r = photocraft_io::export(&doc, "x.psd", &photocraft_io::ExportOptions::default()).unwrap();
