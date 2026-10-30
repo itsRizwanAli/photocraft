@@ -74,8 +74,9 @@ fn glass_card(s: &mut Session, p: &Value) -> Result<Value> {
     let key = step_key(s, "glassCard");
     let k = json!(key);
     // 1. The frosted backdrop: what shows now, as a smart object blurred by a smart filter.
-    let blur_layer = layer_of(&s.execute("layer.stampVisible", json!({"coalesce": k}))?)?;
-    s.execute("layer.smartObjects.convertToSmartObject", json!({"coalesce": k}))?;
+    // The stamp is the active layer; converting it makes a new layer (a new id) holding it.
+    layer_of(&s.execute("layer.stampVisible", json!({"coalesce": k}))?)?;
+    let blur_layer = layer_of(&s.execute("layer.smartObjects.convertToSmartObject", json!({"coalesce": k}))?)?;
     s.execute("filter.blur.gaussianBlur", json!({"radius": blur, "coalesce": k}))?;
     s.execute("layer.setProps", json!({"layer": blur_layer, "name": format!("{name} Blur"), "coalesce": k}))?;
     // 2. The card above it: translucent tint and a thin light edge.

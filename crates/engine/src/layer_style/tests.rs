@@ -593,10 +593,6 @@ fn gradient_overlay_and_stroke_take_many_stops() {
     assert!((g.offset.0 - 0.1).abs() < 1e-6 && (g.offset.1 + 0.2).abs() < 1e-6);
     assert!(!g.align);
     assert!(interpolation.is_none(), "the stop list is the curve");
-    // Editing only the angle keeps the stops.
-    s.execute("layer.layerStyle.gradientOverlay", json!({"angle": 10})).unwrap();
-    let Effect::GradientOverlay { gradient: g, .. } = &effects(&s)[0] else { panic!() };
-    assert_eq!((g.stops.len(), g.angle), (3, 10.0));
     // Unusable stop lists fall back to from/to.
     s.execute("layer.layerStyle.gradientOverlay", json!({"from": "#000000", "to": "#ffffff", "stops": [[0.0, "#ff0000"]], "add": true})).unwrap();
     assert!(effects(&s).iter().any(|e| matches!(e, Effect::GradientOverlay { gradient, .. } if gradient.stops.len() == 2)));

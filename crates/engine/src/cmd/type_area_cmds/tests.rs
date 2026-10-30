@@ -153,14 +153,14 @@ fn release_with_a_path_that_is_not_finite_is_an_error() {
 }
 
 #[test]
-fn area_type_saves_to_psd_as_paragraph_text_with_a_warning() {
+fn area_type_saves_to_psd_as_photoshop_area_type() {
     let mut s = session(8);
     text_layer(&mut s, WORDS);
     set_work_path(&mut s, Path::new(vec![Subpath::polygon(&[(100.0, 100.0), (300.0, 100.0), (300.0, 250.0), (100.0, 250.0)])]));
     s.execute("type.fillPath", json!({})).unwrap();
     let doc = s.active().unwrap().doc.clone();
     let r = photocraft_io::export(&doc, "x.psd", &photocraft_io::ExportOptions::default()).unwrap();
-    assert!(r.warnings.iter().any(|w| w.contains("area type")), "{:?}", r.warnings);
+    assert!(!r.warnings.iter().any(|w| w.contains("area type")), "{:?}", r.warnings);
     let back = photocraft_io::import("x.psd", &r.bytes).unwrap().document;
     let t = back.walk().into_iter().find_map(|(_, _, l)| match &l.content {
         LayerContent::Text(t) => Some(t.clone()),
@@ -168,7 +168,10 @@ fn area_type_saves_to_psd_as_paragraph_text_with_a_warning() {
     });
     let t = t.expect("still a type layer");
     assert_eq!(t.text, WORDS);
-    assert!(matches!(t.shape, TextShape::Box { width, height, .. } if (width - 200.0).abs() < 0.5 && (height - 150.0).abs() < 0.5), "{:?}", t.shape);
+    // Photoshop's area type: it opens again wrapping inside its path, not as a text box.
+    let TextShape::Area { path } = &t.shape else { panic!("not area type: {:?}", t.shape) };
+    let b = photocraft_text::area::path_bounds(path).unwrap();
+    assert!(((b.2 - b.0) - 200.0).abs() < 0.5 && ((b.3 - b.1) - 150.0).abs() < 0.5, "{b:?}");
 }
 
 #[test]
