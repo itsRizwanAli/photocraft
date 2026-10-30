@@ -393,7 +393,7 @@ impl<'a> Para<'a> {
         };
         let from = self.area_origin(m, top_ascent, flow);
         let first_px = self.first_style().size_pt * env.k;
-        break_area(layout, a, from, rows, top_ascent, (self.indent_start, self.indent_end), first_px, self.break_scale, &self.area_budget)
+        break_area(layout, a, from, rows, rows.ascent, (self.indent_start, self.indent_end), first_px, self.break_scale, &self.area_budget)
     }
 
     /// The widths of the tabs on the broken lines of `layout`.

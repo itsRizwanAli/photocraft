@@ -2922,8 +2922,10 @@ fn area_text_stays_inside_an_ellipse() {
     let l = e.layout(&t, 72.0);
     assert!(l.lines.len() >= 4, "{}", l.lines.len());
     assert_lines_inside(&l, &path);
-    // As in Photoshop, the first line sits in the ellipse's tip: within two ascenders of its top.
-    assert!(l.lines[0].baseline < l.lines[0].ascent * 0.7505 * 2.0, "{:?}", l.lines[0]);
+    // As in Photoshop, the first line sits at the ellipse's tip (its ascender at the top) or, when
+    // its first word is wider than the tip, one row (a leading) further down.
+    let fa = l.lines[0].ascent * 0.7505;
+    assert!(l.lines[0].baseline <= fa + 18.0 * 1.2 + 0.6, "{:?}", l.lines[0]);
     // Lines go down the shape in text order.
     for w in l.lines.windows(2) {
         assert!(w[1].baseline >= w[0].baseline && w[1].range.start >= w[0].range.end, "{w:?}");
