@@ -366,6 +366,19 @@ fn created_area_type_roundtrips_through_psd() {
     got.sort();
     want.sort();
     assert_eq!(got, want, "the ellipse's anchors in the document");
+
+    // Centred area type: Photoshop reads the paragraph style from the `Txt2` object's paragraph
+    // runs (`/5 /0 [<< /0 << /0 << /5 << /0 justification >> >> >> >>]`), not only from `TySh`.
+    let mut centred = t.clone();
+    centred.paragraphs[0].style.align = photocraft_doc::text::TextAlign::Center;
+    let block = photocraft_text::psd::build_txt2_at(&[(0, &centred)], None, doc.resolution_dpi);
+    let parsed = photocraft_text::psd::parse_txt2(&block).expect("Txt2 parses");
+    let object = parsed.path(&["1", "1"]).and_then(|o| o.as_array()).and_then(|o| o.first()).expect("one object");
+    let runs = object.path(&["0", "5", "0"]).and_then(|r| r.as_array()).expect("paragraph runs");
+    assert!(!runs.is_empty());
+    for run in runs {
+        assert_eq!(run.path(&["0", "0", "5", "0"]).and_then(|j| j.as_i64()), Some(2), "centred in Txt2: {run:?}");
+    }
 }
 
 /// Review of #8888: the older Photoshop's text objects (`/DocumentObjects /TextObjects`) in the

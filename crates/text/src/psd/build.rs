@@ -66,8 +66,9 @@ pub(crate) fn style_sheet_data(s: &CharStyle, font: usize, k: f32) -> E {
     E::Dict(dict)
 }
 
-pub(crate) fn paragraph_properties(p: &ParagraphStyle, k: f32) -> E {
-    let j = match p.align {
+/// Photoshop's justification code, the same in EngineData (`Justification`) and `Txt2` (`/0`).
+fn justification(a: TextAlign) -> i64 {
+    match a {
         TextAlign::Left => 0,
         TextAlign::Right => 1,
         TextAlign::Center => 2,
@@ -75,9 +76,35 @@ pub(crate) fn paragraph_properties(p: &ParagraphStyle, k: f32) -> E {
         TextAlign::JustifyRight => 4,
         TextAlign::JustifyCenter => 5,
         TextAlign::JustifyAll => 6,
-    };
+    }
+}
+
+/// The `Txt2` model's paragraph runs (`/5 /0`, one per paragraph), each with the justification
+/// of the layer's paragraph at that position: `<< /0 << /0 << /0 () /5 << /0 j … >> >> >> /1 n >>`.
+fn txt2_paragraph_sheets(model: &mut E, layer: &TextLayer) {
+    let paras = layer.paragraph_runs();
+    let Some(E::Array(runs)) = model.get_mut("5").and_then(|r| r.get_mut("0")) else { return };
+    for (i, run) in runs.iter_mut().enumerate() {
+        let Some(p) = paras.get(i).or(paras.last()) else { break };
+        if let Some(props @ E::Dict(_)) = run.get_mut("0").and_then(|s| s.get_mut("0")).and_then(|s| s.get_mut("5")) {
+            props.set("0", E::Int(justification(p.style.align)));
+        }
+    }
+}
+
+/// Whether the `Txt2` model's paragraph runs justify each paragraph as the layer does.
+fn txt2_paragraphs_match(model: &E, layer: &TextLayer) -> bool {
+    let paras = layer.paragraph_runs();
+    let Some(runs) = model.path(&["5", "0"]).and_then(E::as_array) else { return true };
+    runs.iter().enumerate().all(|(i, run)| {
+        let want = paras.get(i).or(paras.last()).map_or(0, |p| justification(p.style.align));
+        run.path(&["0", "0", "5", "0"]).and_then(E::as_i64).unwrap_or(0) == want
+    })
+}
+
+pub(crate) fn paragraph_properties(p: &ParagraphStyle, k: f32) -> E {
     E::Dict(vec![
-        ("Justification".into(), E::Int(j)),
+        ("Justification".into(), E::Int(justification(p.align))),
         ("FirstLineIndent".into(), real(p.first_line_indent_pt / k)),
         ("StartIndent".into(), real(p.start_indent_pt / k)),
         ("EndIndent".into(), real(p.end_indent_pt / k)),
@@ -663,7 +690,8 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
         // restyle the object the way an edited one is, or the file's old style shows on reopen.
         let kept = slot.filter(|o| {
             let model = o.get("0");
-            model.and_then(|m| m.get("0")).and_then(E::as_str) == Some(text.as_str()) && model.is_some_and(|m| txt2_style_matches(layer, m, &fonts, dpi))
+            model.and_then(|m| m.get("0")).and_then(E::as_str) == Some(text.as_str())
+                && model.is_some_and(|m| txt2_style_matches(layer, m, &fonts, dpi) && txt2_paragraphs_match(m, layer))
         });
         // An edited object (#6968): the file's object at this slot with its text changed. It keeps
         // the file's structure — paragraph runs, the view naming its frame, the rest — with every
@@ -719,6 +747,11 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
                 .collect()
         });
         model.set("0", E::String(text));
+        // Photoshop reads the paragraph style from these runs too: a new object's would be the
+        // template's (left-aligned), so centred or right-aligned text came back left-aligned.
+        if !unchanged {
+            txt2_paragraph_sheets(&mut model, layer);
+        }
         match model.get_mut("6") {
             Some(style_run @ E::Dict(_)) => style_run.set("0", E::Array(runs)),
             _ => model.set("6", E::Dict(vec![("0".into(), E::Array(runs))])),
