@@ -3,8 +3,8 @@
 //!
 //! - "Glass Blur": Stamp Visible as a smart object with a Gaussian Blur smart filter, masked to
 //!   the card by a vector mask (the frosted backdrop; edit the blur radius as a smart filter).
-//! - "Glass Card": a rounded-rectangle shape layer above it with a translucent tint, a thin light
-//!   stroke, and Inner Glow and Drop Shadow effects.
+//! - "Glass Card": a rounded-rectangle shape layer above it with a tint at low Fill opacity, a thin
+//!   light stroke, and Inner Glow and Drop Shadow effects.
 //!
 //! The backdrop is a snapshot of what was visible: after changing the layers under the card,
 //! run the command again (Photoshop has no live backdrop blur either).
@@ -84,9 +84,12 @@ fn glass_card(s: &mut Session, p: &Value) -> Result<Value> {
     if stroke_width == 0.0 {
         stroke = Value::Null;
     }
-    let fill = json!([tint[0], tint[1], tint[2], tint_opacity / 100.0]);
+    // A solid tint at the layer's Fill opacity: Photoshop shape fills carry no alpha, and Fill
+    // opacity leaves the stroke and effects at full strength, as glass cards are made there.
+    let fill = json!([tint[0], tint[1], tint[2], 1.0]);
     let card = s.execute("shape.create", json!({"kind": "roundedRect", "rect": rect, "radii": radius, "fill": fill, "stroke": stroke, "name": name, "coalesce": k}))?;
     let card_layer = layer_of(&card)?;
+    s.execute("layer.layerStyle.blendingOptions", json!({"layer": card_layer, "fillOpacity": tint_opacity, "coalesce": k}))?;
     // 3. Mask the blur to the card's own outline, so moving or reshaping stays one path edit.
     let path = card.get("path").cloned().ok_or_else(|| EngineError::Other("the card shape has no path".into()))?;
     s.execute("layer.vectorMask.add", json!({"layer": blur_layer, "path": path, "coalesce": k}))?;

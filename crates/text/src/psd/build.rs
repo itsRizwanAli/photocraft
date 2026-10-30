@@ -576,6 +576,10 @@ pub fn build_txt2(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>) -> Vec
 /// [`build_txt2`] for a document of `dpi` (the style runs of new and edited objects carry sizes
 /// in the document's points, as EngineData does).
 pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi: f32) -> Vec<u8> {
+    // Area type's frame is written in the text space its `TySh` uses ([`psd_text_space`]).
+    let spaced: Vec<(i32, std::borrow::Cow<'_, TextLayer>)> = objects.iter().map(|(i, l)| (*i, psd_text_space(l))).collect();
+    let spaced: Vec<(i32, &TextLayer)> = spaced.iter().map(|(i, l)| (*i, l.as_ref())).collect();
+    let objects: &[(i32, &TextLayer)] = &spaced;
     // A document made here has no block to build on. Type on a path and area type need real
     // objects drawn in frames (the stubs written otherwise can't name one), so they start from
     // a block Photoshop wrote, emptied of its text (see [`photoshop_block`]).
@@ -981,9 +985,38 @@ pub(super) fn engine_antialias(n: f64) -> Option<AntiAlias> {
     })
 }
 
+/// `layer` as a PSD stores area type: Photoshop puts the type layer's origin at the area path's
+/// top-left corner, so `BoxBounds` start at (0, 0) and the path's frame is in that space
+/// (Photoshop 2026, an ellipse at (50, 40): transform `tx 50 ty 40`, `BoxBounds [0 0 500 320]`).
+/// Text space at the document's origin made Photoshop set the type far off its shape once it
+/// laid the text out again. Other shapes are returned as they are; the document position of
+/// every glyph is unchanged.
+pub fn psd_text_space(layer: &TextLayer) -> std::borrow::Cow<'_, TextLayer> {
+    let TextShape::Area { path } = &layer.shape else { return std::borrow::Cow::Borrowed(layer) };
+    let Some((x0, y0, _, _)) = crate::area::path_bounds(path) else { return std::borrow::Cow::Borrowed(layer) };
+    if x0 == 0.0 && y0 == 0.0 {
+        return std::borrow::Cow::Borrowed(layer);
+    }
+    let mut t = layer.clone();
+    t.shape = TextShape::Area { path: path.transform(&photocraft_geom::Affine::translate(-x0, -y0)) };
+    t.transform = layer.transform.mul(&photocraft_geom::Affine::translate(x0, y0));
+    std::borrow::Cow::Owned(t)
+}
+
 /// Builds the `TySh` block for `layer`, patching its current `psd_raw` when present.
 /// `ink` is the layer's rendered bounds in text space (for `bounds`/`boundingBox`).
 pub fn build_tysh(layer: &TextLayer, dpi: f32, ink: Option<[f32; 4]>) -> Vec<u8> {
+    let shifted = psd_text_space(layer);
+    // Ink bounds move with the origin.
+    let (dx, dy) = match (&layer.shape, &shifted.shape) {
+        (TextShape::Area { path: a }, TextShape::Area { path: b }) => match (crate::area::path_bounds(a), crate::area::path_bounds(b)) {
+            (Some((ax, ay, _, _)), Some((bx, by, _, _))) => ((ax - bx) as f32, (ay - by) as f32),
+            _ => (0.0, 0.0),
+        },
+        _ => (0.0, 0.0),
+    };
+    let ink = ink.map(|[l, t, r, b]| [l - dx, t - dy, r - dx, b - dy]);
+    let layer: &TextLayer = &shifted;
     let old = layer.psd_raw.as_deref().and_then(|d| parse_tysh(d));
     let template = old.as_ref().and_then(|t| engine_data(&t.text));
     let e = build_engine_data(layer, template, dpi);

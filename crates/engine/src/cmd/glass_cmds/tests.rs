@@ -27,6 +27,7 @@ fn glass_card_is_a_blurred_masked_smart_object_under_a_styled_shape_in_one_step(
     let card = d.doc.layer(LayerId(r["card"].as_u64().unwrap())).unwrap();
     assert!(matches!(card.content, LayerContent::Shape(_)), "the card is a live shape");
     assert_eq!(card.effects.items.len(), 2, "inner glow and drop shadow");
+    assert!((card.fill_opacity - 0.18).abs() < 1e-3, "the tint shows through at Fill opacity: {}", card.fill_opacity);
     // The card sits above its blur.
     let pos = |id: LayerId| d.doc.layers.iter().position(|l| l.id == id).unwrap();
     assert!(pos(card.id) > pos(blur.id));

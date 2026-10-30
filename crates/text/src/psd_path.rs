@@ -336,6 +336,21 @@ pub(crate) fn update_frame(entry: &mut E, shape: &TextShape) {
             return;
         }
     }
+    // A frame of the other kind (the point frame a new object is padded with under a text box,
+    // or a box frame left on point text) makes Photoshop open the layer as that kind.
+    if kind != PATH_FRAME {
+        match shape {
+            TextShape::Box { x, y, width, height } if kind != BOX_FRAME => {
+                *entry = box_frame(f64::from(*x), f64::from(*y), f64::from(*width), f64::from(*height));
+                return;
+            }
+            TextShape::Point if kind == BOX_FRAME => {
+                *entry = point_frame();
+                return;
+            }
+            _ => {}
+        }
+    }
     let frame = entry.get("0");
     match shape {
         TextShape::Path { path, start, flip } => {
