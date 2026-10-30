@@ -46,11 +46,15 @@ jobs:
 
       - name: Test touched crates
         shell: bash
+        # Every crate runs even when an earlier one fails, so one round shows every failure.
         run: |
-          cargo test -p photocraft-text --lib --tests 2>&1 | tee test-text.log
-          cargo test -p photocraft-engine --lib --tests 2>&1 | tee test-engine.log
-          cargo test -p photocraft-io --lib --tests 2>&1 | tee test-io.log
-          cargo test -p photocraft-automation --lib --tests 2>&1 | tee test-automation.log
+          set +e
+          status=0
+          for c in text engine io automation; do
+            cargo test -p photocraft-$c --lib --tests 2>&1 | tee test-$c.log
+            [ "${PIPESTATUS[0]}" -eq 0 ] || status=1
+          done
+          exit $status
 
       - name: Clippy
         shell: bash

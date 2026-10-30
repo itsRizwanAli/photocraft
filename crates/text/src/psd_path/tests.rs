@@ -324,13 +324,17 @@ fn a_frame_two_objects_name_is_kept() {
     assert_eq!(saved_frame(&txt2, 1).0, 1);
 }
 
-/// Area type's frame becomes a text box over its path's bounds, as its EngineData describes it.
+/// Area type's frame is Photoshop's area frame (a box frame with the path as its outline and
+/// `-3` flags), replacing a path frame the layer had.
 #[test]
-fn an_area_layer_gets_a_box_frame() {
+fn an_area_layer_gets_an_area_frame() {
     let square = photocraft_doc::vector::Path::new(vec![photocraft_doc::vector::Subpath::polygon(&[(10.0, 20.0), (50.0, 20.0), (50.0, 80.0), (10.0, 80.0)])]);
     let mut entry = E::Dict(vec![("0".into(), frame(CIRCLE))]);
     update_frame(&mut entry, &TextShape::Area { path: square });
-    assert_eq!(entry, box_frame(10.0, 20.0, 40.0, 60.0));
+    let f = entry.get("0").unwrap();
+    assert_eq!(frame_kind(f), BOX_FRAME);
+    assert_eq!(f.path(&["2", "6"]).and_then(numbers), Some(vec![-3.0, -3.0]));
+    assert_eq!(f.path(&["1", "0"]).and_then(numbers).unwrap()[..2], [10.0, 20.0], "the outline from the path's first anchor");
 }
 
 /// The area type frame of a Photoshop 2026 PSD (Type tool inside a 500×320 ellipse at (50, 40)):
