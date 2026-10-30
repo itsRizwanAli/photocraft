@@ -285,8 +285,9 @@ fn created_text_layer_roundtrips_through_psd() {
         text: "Größe\nzwei".into(),
         runs: vec![TextRun { len: 3, style: a }, TextRun { len: 9, style: b }],
         paragraphs: vec![
-            ParagraphRun { len: 7, style: ParagraphStyle { align: TextAlign::Center, space_after_pt: 3.0, ..Default::default() } },
-            ParagraphRun { len: 5, style: ParagraphStyle { align: TextAlign::JustifyAll, ..Default::default() } },
+            // "Größe\n" (its break with it, as Photoshop's paragraph runs have it), then "zwei".
+            ParagraphRun { len: 8, style: ParagraphStyle { align: TextAlign::Center, space_after_pt: 3.0, ..Default::default() } },
+            ParagraphRun { len: 4, style: ParagraphStyle { align: TextAlign::JustifyAll, ..Default::default() } },
         ],
         shape: TextShape::Box { x: 0.0, y: 0.0, width: 100.0, height: 60.0 },
         transform: photocraft_geom::Affine::translate(8.0, 6.0),

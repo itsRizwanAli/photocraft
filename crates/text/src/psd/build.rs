@@ -80,14 +80,26 @@ fn justification(a: TextAlign) -> i64 {
 }
 
 /// The `Txt2` model's paragraph runs (`/5 /0`, one per paragraph), each with the justification
-/// of the layer's paragraph at that position: `<< /0 << /0 << /0 () /5 << /0 j … >> >> >> /1 n >>`.
+/// of the layer's paragraph at that position. Photoshop writes a run's sheet either inline,
+/// `<< /0 () /5 << /0 j … >> /6 parent >>`, or as just the index of a shared sheet (`/0 1`, as in
+/// its own block this crate starts from); an index becomes an inline sheet with that parent.
 fn txt2_paragraph_sheets(model: &mut E, layer: &TextLayer) {
     let paras = layer.paragraph_runs();
     let Some(E::Array(runs)) = model.get_mut("5").and_then(|r| r.get_mut("0")) else { return };
     for (i, run) in runs.iter_mut().enumerate() {
         let Some(p) = paras.get(i).or(paras.last()) else { break };
-        if let Some(props @ E::Dict(_)) = run.get_mut("0").and_then(|s| s.get_mut("0")).and_then(|s| s.get_mut("5")) {
-            props.set("0", E::Int(justification(p.style.align)));
+        let j = E::Int(justification(p.style.align));
+        let Some(holder @ E::Dict(_)) = run.get_mut("0") else { continue };
+        let parent = holder.path(&["0"]).and_then(E::as_i64);
+        if let Some(parent) = parent {
+            let props = E::Dict(vec![("0".into(), j)]);
+            holder.set("0", E::Dict(vec![("0".into(), E::String(String::new())), ("5".into(), props), ("6".into(), E::Int(parent))]));
+        } else if let Some(sheet @ E::Dict(_)) = holder.get_mut("0") {
+            if let Some(props @ E::Dict(_)) = sheet.get_mut("5") {
+                props.set("0", j);
+            } else {
+                sheet.set("5", E::Dict(vec![("0".into(), j)]));
+            }
         }
     }
 }
