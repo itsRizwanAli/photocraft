@@ -34,6 +34,8 @@ mod vertical;
 
 #[cfg(test)]
 pub(crate) use area::AREA_PASSES;
+#[cfg(test)]
+pub(crate) use shaping::AREA_BAND_ASCENT;
 pub use navigate::{byte_index, char_index, hit_char, line_edge, line_index, line_step, text_point_inside, word_boundary};
 use paragraphs::next_tab_stop;
 pub use paragraphs::{DEFAULT_TAB_STOP_PT, split_paragraphs};

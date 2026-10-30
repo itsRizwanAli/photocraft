@@ -2897,14 +2897,18 @@ fn area_ellipse(x: f64, y: f64, w: f64, h: f64) -> photocraft_doc::vector::Path 
 
 const BUBBLE_TEXT: &str = "Well, that went better than expected. Now where did the cat hide the keys this time?";
 
-/// Every laid-out line sits inside a span of the shape across its band. The shape's first line
-/// is fitted from its tallest ascender, as a text box's is (0.7505 of Inter's ascent: its 'd' height for
-/// the test fonts), not from the font's full ascent.
+/// The band an area line is fitted in, as Photoshop fits it: from just below its tallest
+/// ascender (0.7505 of Inter's ascent is its 'd' height) down to its baseline.
+fn area_band(line: &crate::LineInfo) -> (f32, f32) {
+    (line.baseline - line.ascent * 0.7505 * crate::layout::AREA_BAND_ASCENT, line.baseline)
+}
+
+/// Every laid-out line sits inside a span of the shape across its band.
 fn assert_lines_inside(l: &crate::TextLayout, path: &photocraft_doc::vector::Path) {
     let a = crate::area::AreaShape::new(path, false).unwrap();
-    for (i, line) in l.lines.iter().enumerate() {
-        let ascent = if i == 0 { line.ascent * 0.7505 } else { line.ascent };
-        let spans = a.spans(line.baseline - ascent, line.baseline + line.descent, 0.0);
+    for line in &l.lines {
+        let (top, bottom) = area_band(line);
+        let spans = a.spans(top, bottom, 0.0);
         assert!(spans.iter().any(|&(s0, s1)| line.x0 >= s0 - 0.5 && line.x1 <= s1 + 0.5), "{line:?} not inside {spans:?}");
     }
 }
@@ -2918,8 +2922,8 @@ fn area_text_stays_inside_an_ellipse() {
     let l = e.layout(&t, 72.0);
     assert!(l.lines.len() >= 4, "{}", l.lines.len());
     assert_lines_inside(&l, &path);
-    // The top of an ellipse is too narrow for a line at its very edge: the first line starts lower.
-    assert!(l.lines[0].baseline - l.lines[0].ascent * 0.7505 > 1.0, "{:?}", l.lines[0]);
+    // As in Photoshop, the first line sits in the ellipse's tip: within two ascenders of its top.
+    assert!(l.lines[0].baseline < l.lines[0].ascent * 0.7505 * 2.0, "{:?}", l.lines[0]);
     // Lines go down the shape in text order.
     for w in l.lines.windows(2) {
         assert!(w[1].baseline >= w[0].baseline && w[1].range.start >= w[0].range.end, "{w:?}");
@@ -3165,11 +3169,9 @@ fn area_justify_fills_each_span_but_the_last_line() {
     assert!(l.lines.len() >= 4, "{}", l.lines.len());
     assert_lines_inside(&l, &path);
     let a = crate::area::AreaShape::new(&path, false).unwrap();
-    // The first line is fitted from its tallest ascender (see `assert_lines_inside`).
-    let first = l.lines[0].range.clone();
     let span_of = |line: &crate::LineInfo| {
-        let ascent = if line.range == first { line.ascent * 0.7505 } else { line.ascent };
-        a.spans(line.baseline - ascent, line.baseline + line.descent, 0.0)
+        let (top, bottom) = area_band(line);
+        a.spans(top, bottom, 0.0)
             .into_iter()
             .find(|&(s0, s1)| line.x0 >= s0 - 0.5 && line.x1 <= s1 + 0.5)
             .unwrap()

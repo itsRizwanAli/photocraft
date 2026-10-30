@@ -9,6 +9,9 @@ use parley::{Alignment, AlignmentOptions, FontFeatures, Layout, LayoutContext, S
 use photocraft_doc::text::{CharStyle, ParagraphStyle, TextAlign, TextDirection};
 
 use super::area::{LineMetrics, MAX_AREA_PASSES, area_metrics, break_area};
+
+/// The part of a line's ascender height its area-type band starts at (see `break_lines`).
+pub(crate) const AREA_BAND_ASCENT: f32 = 0.95;
 use super::paragraphs::{TabWidth, strip_break, tab_widths};
 use super::style::{
     SYNTHETIC_SMALL_CAPS_SCALE, SmallCapsMode, drawn_style, effective_horizontal_scale, feature_list, first_ascent, hangul_runs, probe_smcp, small_caps_mode,
@@ -373,15 +376,24 @@ impl<'a> Para<'a> {
         // out taller than the row it was planned in and no second plan is needed.
         layout.break_all_lines(None);
         let m = area_metrics(layout, env.styles, &self.ps, env.k, self.first_style(), env.vertical);
-        // The shape's first line sits as a text box's does: the top of its tallest ascender at
-        // the top of the shape, not the font's full ascent (which put it about 0.24 em low).
-        let top_ascent = match flow.prev_baseline {
-            None if !env.vertical => layout.lines().next().and_then(|l| first_ascent(&l)).map_or(m.ascent, |fa| fa.min(m.ascent)),
-            _ => m.ascent,
+        // Photoshop fits each line of horizontal area type in the band from its tallest ascender
+        // down to its baseline: the shape's first line sits as a text box's does (that ascender at
+        // the top of the shape), and descenders may hang below the shape's edge. Measured on
+        // Photoshop 2026's own area type in an ellipse (Arial 28 pt): every line's edge meets the
+        // ellipse at its ascender top in the upper half and at its baseline in the lower half.
+        // The font's full ascent and descent put the first line about 0.24 em low and made every
+        // line narrower than Photoshop's.
+        let (rows, top_ascent) = if env.vertical {
+            (m, m.ascent)
+        } else {
+            let fa = layout.lines().next().and_then(|l| first_ascent(&l)).map_or(m.ascent, |fa| fa.min(m.ascent));
+            // Photoshop's edges meet the shape about 5 % of the ascender below its top (the
+            // glyphs' own side bearings), which lets the first line sit in a curved shape's tip.
+            (LineMetrics { ascent: fa * AREA_BAND_ASCENT, descent: 0.0, leading: m.leading }, fa)
         };
         let from = self.area_origin(m, top_ascent, flow);
         let first_px = self.first_style().size_pt * env.k;
-        break_area(layout, a, from, m, top_ascent, (self.indent_start, self.indent_end), first_px, self.break_scale, &self.area_budget)
+        break_area(layout, a, from, rows, top_ascent, (self.indent_start, self.indent_end), first_px, self.break_scale, &self.area_budget)
     }
 
     /// The widths of the tabs on the broken lines of `layout`.
