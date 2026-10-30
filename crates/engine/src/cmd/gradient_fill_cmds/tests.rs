@@ -386,3 +386,19 @@ fn stop_rejects_huge_indices_without_panicking() {
     assert_eq!(midpoints, vec![0.25]);
     assert_eq!(s.active().unwrap().history.past_len(), h + 1);
 }
+
+/// The menu's New Fill Layer › Gradient takes many stops too, in one undo step (it took only
+/// from/to and dropped `stops`, so a three-colour background came out black to white).
+#[test]
+fn new_fill_layer_gradient_takes_many_stops_in_one_step() {
+    let mut s = session(8, "white");
+    let steps = s.active().unwrap().history.past_len();
+    let layers = layer_count(&s);
+    s.execute("layer.newFillLayer.gradient", serde_json::json!({"stops": [[0, "#ff2d87"], [0.5, "#7a3cff"], [1, "#00c8ff"]], "angle": 45})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one step");
+    let Fill::Gradient { stops, angle, .. } = active_fill(&s) else { panic!("a gradient fill") };
+    assert_eq!(stops.len(), 3);
+    assert!((stops[1].1.to_rgb()[2] - 1.0).abs() < 0.01 && (angle - 45.0).abs() < 1e-3, "{stops:?} {angle}");
+    assert!(s.undo());
+    assert_eq!(layer_count(&s), layers, "one Undo removes it");
+}

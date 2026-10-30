@@ -809,7 +809,7 @@ fn build() -> Vec<CommandSpec> {
             "Gradient…",
             ["Layer", "New Fill Layer"],
             None,
-            r##"{"from":"#rrggbb","to":"#rrggbb","angle":deg=90,"style":"linear|radial|angle|reflected|diamond","reverse":bool,"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask; else the selection is the layer mask)}"##,
+            r##"{"from":"#rrggbb","to":"#rrggbb","stops":[[t,"#rrggbb"],…]? (many colours; overrides from/to),"transparency":[[t,0..100],…]?,"midpoints":[…]?,"angle":deg=90,"style":"linear|radial|angle|reflected|diamond","reverse":bool,"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask; else the selection is the layer mask)}"##,
             has_doc,
             |s, p| {
                 let a = color_param("layer.newFillLayer.gradient", p, "from", s.tools.foreground)?;
@@ -818,7 +818,12 @@ fn build() -> Vec<CommandSpec> {
                 let style = crate::layer_style::gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear"));
                 let reverse = p.get("reverse").and_then(Value::as_bool).unwrap_or(false);
                 let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
-                let id = s.edit("New Gradient Fill Layer", |doc, active| {
+                // Many stops, transparency or midpoints: set by gradient.fill.set in the same undo step.
+                let more: serde_json::Map<String, Value> =
+                    ["stops", "transparency", "midpoints"].iter().filter_map(|k| p.get(*k).map(|v| ((*k).to_string(), v.clone()))).collect();
+                let key = (!more.is_empty()).then(|| crate::extra_cmds::step_key(s, "newGradientFill"));
+                s.coalesce_request = key.clone();
+                let made = s.edit("New Gradient Fill Layer", |doc, active| {
                     let fill = Fill::gradient(
                         vec![(0.0, Color::rgba(a[0], a[1], a[2], a[3])), (1.0, Color::rgba(b[0], b[1], b[2], b[3]))],
                         angle,
@@ -832,7 +837,18 @@ fn build() -> Vec<CommandSpec> {
                     let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::Auto);
                     *active = Some(id);
                     Ok(id)
-                })?;
+                });
+                s.coalesce_request = None;
+                let id = made?;
+                if let Some(key) = key {
+                    let mut set = Value::Object(more);
+                    set["layer"] = json!(id.0);
+                    set["coalesce"] = json!(key);
+                    if let Err(e) = s.execute("gradient.fill.set", set) {
+                        s.undo();
+                        return Err(e);
+                    }
+                }
                 Ok(json!({ "layer": id.0 }))
             }
         ),
