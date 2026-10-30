@@ -65,7 +65,7 @@ fn fill_path(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Turns `t` into area type inside `source` (document space). The layer keeps the path in text
 /// space, so the type lands inside the path where it is drawn.
-pub(crate) fn make_area(t: &mut photocraft_doc::text::TextLayer, source: &Path) -> Result<()> {
+pub(crate) fn make_area(t: &mut photocraft_doc::TextLayer, source: &Path) -> Result<()> {
     let inv = t.transform.inverse().ok_or_else(|| EngineError::Other("the type layer's transform cannot be inverted".into()))?;
     let map = |q: Point| inv.apply(q);
     let mut path = source.clone();

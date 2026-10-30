@@ -529,8 +529,11 @@ pub const MAX_TEXT_INDEX: i32 = 0xFFFF;
 /// Optical — so a fresh document of ordinary Metrics text has nothing to put in the block.
 /// Writing Photoshop's empty `<< /0 << >> >>` stub anyway makes some readers (Photopea) fail
 /// (#3514); the export omits the block for such a document.
+/// Type on a path and area type need it too: their path lives only in the layer's `Txt2` frame.
 pub fn needs_txt2(objects: &[(i32, &TextLayer)]) -> bool {
-    objects.iter().any(|(_, l)| l.char_runs().iter().any(|r| r.style.kerning == Kerning::Optical))
+    objects.iter().any(|(_, l)| {
+        matches!(l.shape, TextShape::Path { .. } | TextShape::Area { .. }) || l.char_runs().iter().any(|r| r.style.kerning == Kerning::Optical)
+    })
 }
 
 /// The document's `Txt2` block for `objects`: `(TextIndex, layer)` pairs, one text object each
