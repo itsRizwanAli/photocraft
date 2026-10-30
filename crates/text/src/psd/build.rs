@@ -873,19 +873,36 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
         sruns.push(E::Dict(vec![("StyleSheet".into(), E::Dict(vec![("StyleSheetData".into(), data)]))]));
         slens.push(E::Int(n as i64));
     }
+    // One paragraph run per paragraph, as Photoshop writes them: a run spanning a break (the
+    // model joins neighbouring paragraphs of one style) made Photoshop lay the paragraphs out as
+    // one line. Each takes the style of the run its paragraph starts in; the last also covers the
+    // closing `` (an empty last paragraph is that `` alone).
+    let mut starts = Vec::with_capacity(paras.len());
+    let mut at = 0usize;
+    for p in &paras {
+        starts.push((at, &p.style));
+        at += p.len;
+    }
+    let style_at = |byte: usize| starts.iter().rev().find(|(s, _)| *s <= byte).or(starts.first()).map(|(_, st)| *st);
+    let mut pieces: Vec<(usize, &str)> = Vec::new();
+    let mut from = 0usize;
+    for piece in text.split_inclusive('') {
+        pieces.push((from, piece));
+        from += piece.len();
+    }
+    if text.is_empty() || text.ends_with('') {
+        pieces.push((text.len(), ""));
+    }
     let mut pruns = Vec::new();
     let mut plens = Vec::new();
-    let mut at = 0usize;
-    for (i, p) in paras.iter().enumerate() {
-        let piece = &text[at..at + p.len];
-        at += p.len;
-        let mut n = utf16_len(piece);
-        if i + 1 == paras.len() {
-            n += 1;
-        }
+    let count = pieces.len();
+    for (i, (start, piece)) in pieces.into_iter().enumerate() {
+        let default = ParagraphStyle::default();
+        let style = style_at(start).unwrap_or(&default);
+        let n = utf16_len(piece) + i64::from(i + 1 == count);
         pruns.push(E::Dict(vec![(
             "ParagraphSheet".into(),
-            E::Dict(vec![("DefaultStyleSheet".into(), E::Int(0)), ("Properties".into(), paragraph_properties(&p.style, k))]),
+            E::Dict(vec![("DefaultStyleSheet".into(), E::Int(0)), ("Properties".into(), paragraph_properties(style, k))]),
         )]));
         plens.push(E::Int(n));
     }
@@ -1102,14 +1119,18 @@ pub fn build_tysh(layer: &TextLayer, dpi: f32, ink: Option<[f32; 4]>) -> Vec<u8>
     set(&mut text, "boundingBox", rect("boundingBox"));
     set(&mut text, "EngineData", D::RawData(ed::write(&e)));
     let warp = match (&layer.warp, old.as_ref().and_then(|o| o.warp.clone())) {
-        (Some(w), _) => Some(
-            Descriptor::new("warp")
+        (Some(w), _) => {
+            let mut d = Descriptor::new("warp")
                 .with("warpStyle", enumv("warpStyle", &w.style))
                 .with("warpValue", D::Double(f64::from(w.value)))
                 .with("warpPerspective", D::Double(f64::from(w.horizontal_distortion)))
                 .with("warpPerspectiveOther", D::Double(f64::from(w.vertical_distortion)))
-                .with("warpRotate", enumv("Ornt", if w.horizontal { "Hrzn" } else { "Vrtc" })),
-        ),
+                .with("warpRotate", enumv("Ornt", if w.horizontal { "Hrzn" } else { "Vrtc" }));
+            // Photoshop names it with a lone NUL, as it writes it: with an empty (zero-length) name
+            // it reads the layer back unwarped.
+            d.name = UnicodeString::new_nul("");
+            Some(d)
+        }
         (None, Some(old)) if enum_value(&old, "warpStyle").as_deref() == Some("warpNone") => Some(old),
         _ => None,
     };

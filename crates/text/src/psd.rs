@@ -265,6 +265,49 @@ mod nonfinite_tests {
         assert_eq!((w.value, w.horizontal_distortion, w.vertical_distortion), (100.0, -100.0, 100.0));
     }
 
+    /// One paragraph run per paragraph, even where the model holds one run over several (two
+    /// lines of point text): a run spanning the break made Photoshop set them as one line.
+    #[test]
+    fn each_paragraph_gets_its_own_paragraph_run() {
+        let text = "HALF
+PRICE".to_string();
+        let layer = TextLayer {
+            runs: vec![TextRun { len: text.len(), style: CharStyle { size_pt: 12.0, ..Default::default() } }],
+            paragraphs: vec![photocraft_doc::text::ParagraphRun { len: text.len(), style: Default::default() }],
+            text,
+            ..Default::default()
+        };
+        let e = build_engine_data(&layer, None, 72.0);
+        let lens = e.path(&["EngineDict", "ParagraphRun", "RunLengthArray"]).and_then(crate::engine_data::Value::as_array).unwrap();
+        let lens: Vec<i64> = lens.iter().filter_map(crate::engine_data::Value::as_i64).collect();
+        assert_eq!(lens, [5, 6], "HALF\r and PRICE\r");
+        let trailing = TextLayer { text: "A
+".into(), ..layer.clone() };
+        let trailing = TextLayer {
+            runs: vec![TextRun { len: 2, style: CharStyle { size_pt: 12.0, ..Default::default() } }],
+            paragraphs: vec![photocraft_doc::text::ParagraphRun { len: 2, style: Default::default() }],
+            ..trailing
+        };
+        let e = build_engine_data(&trailing, None, 72.0);
+        let lens = e.path(&["EngineDict", "ParagraphRun", "RunLengthArray"]).and_then(crate::engine_data::Value::as_array).unwrap();
+        let lens: Vec<i64> = lens.iter().filter_map(crate::engine_data::Value::as_i64).collect();
+        assert_eq!(lens, [2, 1], "A\r, then the empty last paragraph's \r");
+    }
+
+    /// Photoshop reads a warp whose descriptor is named with a lone NUL (as it writes it), and
+    /// reads one with a zero-length name back unwarped.
+    #[test]
+    fn the_warp_descriptor_is_named_as_photoshop_names_it() {
+        let layer = TextLayer {
+            text: "x".into(),
+            runs: vec![TextRun { len: 1, style: CharStyle { size_pt: 12.0, ..Default::default() } }],
+            warp: Some(photocraft_doc::text::TextWarp { style: "warpArc".into(), value: 30.0, ..Default::default() }),
+            ..Default::default()
+        };
+        let t = parse_tysh(&build_tysh(&layer, 72.0, None)).unwrap();
+        assert_eq!(t.warp.unwrap().name, UnicodeString::new_nul(""));
+    }
+
     #[test]
     fn infinite_dpi_does_not_write_a_zero_size() {
         let layer =
