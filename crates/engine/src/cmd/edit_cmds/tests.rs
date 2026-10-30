@@ -12,6 +12,38 @@ fn session() -> Session {
     s
 }
 
+/// UI-217-23: with no selection, Copy takes a masked pixel layer whole, so Paste keeps its mask;
+/// a plain pixel layer and a selection still copy pixels.
+#[test]
+fn copy_paste_keeps_a_pixel_layers_mask() {
+    let mut s = session();
+    let copied = s.execute("edit.copy", json!({})).unwrap();
+    assert!(s.clipboard.as_ref().unwrap().layers.is_none(), "a plain pixel layer copies its pixels");
+    assert_eq!(copied["bounds"], json!([10, 10, 40, 20]));
+    s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+    let source = s.active().unwrap().active_layer.unwrap();
+    s.edit("paint mask", |doc, _| {
+        doc.layer_mut(source).unwrap().mask.as_mut().unwrap().surface.fill_rect(Rect::new(10, 10, 20, 20), &[1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    assert!(s.clipboard.as_ref().unwrap().layers.is_some(), "a masked pixel layer is taken whole");
+    s.execute("edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
+    let d = s.active().unwrap();
+    let pasted = d.active_layer.unwrap();
+    assert_ne!(pasted, source);
+    let l = d.doc.layer(pasted).unwrap();
+    assert!(matches!(l.content, LayerContent::Raster(_)), "still a pixel layer");
+    let mask = l.mask.as_ref().expect("the paste keeps the mask");
+    assert!(mask.surface.rgba(15, 15)[0] > 0.99 && mask.surface.rgba(45, 25)[0] < 0.01, "with its contents");
+    // A selection still copies the selected pixels only.
+    s.execute("layer.select", json!({"layer": source.0})).unwrap();
+    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 5, "height": 5})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    assert!(s.clipboard.as_ref().unwrap().layers.is_none(), "a selection copies pixels");
+}
+
 #[test]
 fn new_clipboard_document_rejects_an_unrepresentable_origin() {
     let mut s = Session::new();

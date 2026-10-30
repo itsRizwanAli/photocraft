@@ -1,0 +1,72 @@
+name: agent-build
+
+# Fork-only build for the design-improvements work: tests the touched crates and builds the
+# Windows release binaries as a downloadable artifact. Local builds are blocked by Smart App
+# Control on the developer machine (#1585).
+on:
+  push:
+    branches: [design-improvements]
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: "Extra cargo test filter args (empty: the default set)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out craft-fonts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: craft-fonts
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-on-failure: true
+
+      - name: Test touched crates
+        shell: bash
+        run: |
+          cargo test -p photocraft-text --lib --tests 2>&1 | tee test-text.log
+          cargo test -p photocraft-engine --lib --tests 2>&1 | tee test-engine.log
+          cargo test -p photocraft-io --lib --tests 2>&1 | tee test-io.log
+          cargo test -p photocraft-automation --lib --tests 2>&1 | tee test-automation.log
+
+      - name: Clippy
+        shell: bash
+        run: cargo clippy -p photocraft-text -p photocraft-engine -p photocraft-io -p photocraft-automation --all-targets -- -D warnings 2>&1 | tee clippy.log
+
+      - name: Build release binaries
+        if: always()
+        shell: bash
+        run: cargo build --release -p photocraft -p photocraft-cli 2>&1 | tail -40 | tee build.log
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: photocraft-windows
+          path: |
+            target/release/photocraft.exe
+            target/release/photocraft-cli.exe
+            *.log
+          if-no-files-found: warn

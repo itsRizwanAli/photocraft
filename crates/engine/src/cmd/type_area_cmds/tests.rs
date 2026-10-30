@@ -230,3 +230,26 @@ fn a_resolution_change_keeps_area_type_wrapping_where_it_was() {
         assert!(w.abs_diff(w0 * k) <= 3 && h.abs_diff(h0 * k) <= 3, "{params}: {w0}x{h0} -> {w}x{h}");
     }
 }
+
+/// `type.create` with `"shape"`: area type inside a shape layer in one command and one undo step.
+#[test]
+fn type_create_in_a_shape_wraps_inside_it_in_one_step() {
+    let mut s = session(8);
+    let shape = s.execute("shape.create", json!({"kind": "ellipse", "rect": [40, 40, 240, 180], "fill": "#dddddd"})).unwrap();
+    let shape = shape["layer"].as_u64().unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    let r = s.execute("type.create", json!({"text": WORDS, "size": 14, "color": "#000000", "shape": shape})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one step");
+    let id = LayerId(r["layer"].as_u64().unwrap());
+    assert!(matches!(text(&s, id).shape, TextShape::Area { .. }), "area type");
+    let lines = s.execute("type.info", json!({"layer": id.0})).unwrap()["lines"].as_array().unwrap().clone();
+    assert!(lines.len() >= 3, "it wraps: {lines:?}");
+    for l in &lines {
+        let (x0, x1, b) = (l["x0"].as_f64().unwrap(), l["x1"].as_f64().unwrap(), l["baseline"].as_f64().unwrap());
+        assert!(x0 >= 39.5 && x1 <= 280.5 && b > 40.0 && b < 220.5, "inside the ellipse's box: {l}");
+    }
+    // Not a shape layer: refused, and no type layer is left behind.
+    let layers = s.active().unwrap().doc.layers.len();
+    assert!(s.execute("type.create", json!({"text": "x", "shape": id.0})).is_err());
+    assert_eq!(s.active().unwrap().doc.layers.len(), layers);
+}

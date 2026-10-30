@@ -39,6 +39,18 @@ fn without_unchanged_ends(gradient: &Gradient, params: &Value) -> Value {
 
 /// Edits recorded source stops, initializing legacy curves from their end colours.
 pub(super) fn overlay(gradient: &mut Gradient, interpolation: &mut Option<GradientInterpolation>, params: &Value) {
+    // A full stop list replaces the curve: no recorded method rebakes it from two ends.
+    if super::param_stops(params).is_some() {
+        *interpolation = None;
+        let mut rest = params.clone();
+        if let Some(object) = rest.as_object_mut() {
+            for key in ["method", "smoothness", "from", "to"] {
+                object.remove(key);
+            }
+        }
+        overlay_gradient(gradient, &rest);
+        return;
+    }
     // Reset to Default restores the factory's unbaked interpolation too.
     if params.get("method").and_then(Value::as_str) == Some("custom") {
         if let Some(source) = interpolation.take() {

@@ -31,7 +31,7 @@ fn has_text(s: &Session) -> std::result::Result<(), String> {
 
 /// The path area type fills, in document space: the work path (default) or a shape layer's
 /// path (`"shape":id`). Every closed subpath counts, with its path operation.
-fn area_source(doc: &Document, p: &Value) -> Result<Path> {
+pub(crate) fn area_source(doc: &Document, p: &Value) -> Result<Path> {
     let path = match p.get("shape") {
         None | Some(Value::Null) => doc.work_path.as_ref().ok_or_else(|| bad("the document has no work path; draw a closed path or pass \"shape\":layerId"))?,
         Some(v) => {
@@ -59,23 +59,25 @@ fn fill_path(s: &mut Session, p: &Value) -> Result<Value> {
     // `with_text` refuses a locked layer.
     let source = area_source(doc, p)?;
     let n = source.subpaths.len();
-    with_text(s, p, "Area Type", |t, _| {
-        // The path is in document space; the layer keeps it in text space so the type lands
-        // inside the path where it is drawn.
-        let inv = t.transform.inverse().ok_or_else(|| EngineError::Other("the type layer's transform cannot be inverted".into()))?;
-        let map = |q: Point| inv.apply(q);
-        let mut path = source.clone();
-        for k in path.subpaths.iter_mut().flat_map(|s| s.knots.iter_mut()) {
-            *k = Knot { anchor: map(k.anchor), in_ctrl: map(k.in_ctrl), out_ctrl: map(k.out_ctrl), smooth: k.smooth };
-        }
-        let vertical = t.orientation == photocraft_doc::text::Orientation::Vertical;
-        if photocraft_text::area::AreaShape::new(&path, vertical).is_none() {
-            return Err(bad("the path encloses no area; draw a closed path"));
-        }
-        t.shape = TextShape::Area { path };
-        Ok(())
-    })?;
+    with_text(s, p, "Area Type", |t, _| make_area(t, &source))?;
     Ok(json!({"layer": id.0, "subpaths": n}))
+}
+
+/// Turns `t` into area type inside `source` (document space). The layer keeps the path in text
+/// space, so the type lands inside the path where it is drawn.
+pub(crate) fn make_area(t: &mut photocraft_doc::text::TextLayer, source: &Path) -> Result<()> {
+    let inv = t.transform.inverse().ok_or_else(|| EngineError::Other("the type layer's transform cannot be inverted".into()))?;
+    let map = |q: Point| inv.apply(q);
+    let mut path = source.clone();
+    for k in path.subpaths.iter_mut().flat_map(|s| s.knots.iter_mut()) {
+        *k = Knot { anchor: map(k.anchor), in_ctrl: map(k.in_ctrl), out_ctrl: map(k.out_ctrl), smooth: k.smooth };
+    }
+    let vertical = t.orientation == photocraft_doc::text::Orientation::Vertical;
+    if photocraft_text::area::AreaShape::new(&path, vertical).is_none() {
+        return Err(bad("the path encloses no area; draw a closed path"));
+    }
+    t.shape = TextShape::Area { path };
+    Ok(())
 }
 
 pub fn specs() -> Vec<CommandSpec> {

@@ -3052,7 +3052,23 @@ fn area_without_room_lays_out_nothing_and_a_bad_path_lays_out_as_point_text() {
 }
 
 #[test]
-fn area_word_wider_than_every_span_overflows_instead_of_hiding_the_text() {
+fn area_first_line_sits_where_a_text_box_puts_it() {
+    // The same rectangle as a text box and as an area path: the first baseline matches (it sat
+    // about 0.24 em lower in the area before), and later lines follow one leading apart.
+    let mut e = TextEngine::new();
+    let text = "Wonderful things happen in speech bubbles every single day.";
+    let mut boxed = point(text, 24.0);
+    boxed.shape = TextShape::Box { x: 10.0, y: 20.0, width: 200.0, height: 300.0 };
+    let mut area = point(text, 24.0);
+    area.shape = TextShape::Area { path: area_poly(&[(10.0, 20.0), (210.0, 20.0), (210.0, 320.0), (10.0, 320.0)]) };
+    let (b, a) = (e.layout(&boxed, 72.0), e.layout(&area, 72.0));
+    assert!(b.lines.len() >= 2 && a.lines.len() >= 2);
+    assert!((a.lines[0].baseline - b.lines[0].baseline).abs() < 0.6, "area {} box {}", a.lines[0].baseline, b.lines[0].baseline);
+    assert!((a.lines[1].baseline - b.lines[1].baseline).abs() < 0.6, "area {} box {}", a.lines[1].baseline, b.lines[1].baseline);
+}
+
+#[test]
+fn area_word_wider_than_every_span_breaks_at_the_span_edge_instead_of_hiding_the_text() {
     use photocraft_doc::vector::Subpath;
     let mut e = TextEngine::new();
     // Two 40 px columns 120 px apart: their bounding box is 200 px wide, but no span is wider
@@ -3065,9 +3081,14 @@ fn area_word_wider_than_every_span_overflows_instead_of_hiding_the_text() {
     t.shape = TextShape::Area { path };
     let l = e.layout(&t, 72.0);
     let first = l.lines.first().expect("the text is shown");
-    // The word overflows its 40 px span on the first row (box text would break it, #6694).
-    assert!(first.x1 - first.x0 > 40.0 && first.x1 - first.x0 < 200.0, "{first:?}");
+    // The word breaks at its 40 px span's edge, as box text does (#6694), instead of running out.
+    assert!(first.x1 - first.x0 <= 40.5, "{first:?}");
     assert!(first.x0 >= -0.5, "{first:?}");
+    assert!(first.range.end < "Wonderfulness".len(), "the word is split: {first:?}");
+    // Every line stays inside a column.
+    for line in &l.lines {
+        assert!(line.x1 <= 40.5 || line.x0 >= 159.5, "{line:?}");
+    }
     // Nothing is hidden.
     assert_eq!(l.lines.last().map(|line| line.range.end), Some(t.text.len()), "{:?}", l.lines);
 }

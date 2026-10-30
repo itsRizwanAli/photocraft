@@ -135,6 +135,7 @@ pub mod slice_cmds;
 pub mod smart_cmds;
 pub mod smartselect_cmds;
 pub mod solid_fill_cmds;
+pub mod glass_cmds;
 pub mod stamp_cmds;
 pub mod style_asl_cmds;
 pub mod swatch_cmds;
@@ -1267,6 +1268,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::sampler_cmds::specs());
     v.extend(crate::brush_key_cmds::specs());
     v.extend(crate::stamp_cmds::specs());
+    v.extend(crate::glass_cmds::specs());
     v.extend(crate::align_cmds::specs());
     v.extend(crate::photo_cmds::specs());
     v.extend(crate::lens_cmds::specs());

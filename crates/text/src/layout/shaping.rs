@@ -11,7 +11,8 @@ use photocraft_doc::text::{CharStyle, ParagraphStyle, TextAlign, TextDirection};
 use super::area::{LineMetrics, MAX_AREA_PASSES, area_metrics, break_area};
 use super::paragraphs::{TabWidth, strip_break, tab_widths};
 use super::style::{
-    SYNTHETIC_SMALL_CAPS_SCALE, SmallCapsMode, drawn_style, effective_horizontal_scale, feature_list, hangul_runs, probe_smcp, small_caps_mode, style_props,
+    SYNTHETIC_SMALL_CAPS_SCALE, SmallCapsMode, drawn_style, effective_horizontal_scale, feature_list, first_ascent, hangul_runs, probe_smcp, small_caps_mode,
+    style_props,
 };
 use super::vertical::vertical_class;
 use super::{Env, FORCED_LINE_BREAK, Flow, LRM, RLM, RunBrush, Slot, VClass};
@@ -205,6 +206,10 @@ pub(super) struct Para<'a> {
     pub(super) tab_px: f32,
     /// Line-breaking passes left for this paragraph's area type (see `break_area`).
     area_budget: Cell<usize>,
+    /// Area type: break a word at its span's edge. Set once a word no span of the shape holds
+    /// overflowed its span, as box text does (#6694); off at first so a word skips a narrow span
+    /// for a wider one.
+    area_break_word: Cell<bool>,
 }
 
 impl<'a> Para<'a> {
@@ -251,6 +256,7 @@ impl<'a> Para<'a> {
             break_scale: 1.0,
             tab_px: DEFAULT_TAB_STOP_PT * k,
             area_budget: Cell::new(MAX_AREA_PASSES),
+            area_break_word: Cell::new(false),
         };
         para.break_scale = para.horizontal_break_scale();
         para
@@ -301,7 +307,7 @@ impl<'a> Para<'a> {
         // Paragraph text breaks a word wider than the box at the box edge, as Photoshop
         // does (#6694): parley's default only breaks at UAX #14 opportunities and lets the
         // word run out of the box. Point text has no width to overflow.
-        if env.is_box {
+        if env.is_box || self.area_break_word.get() {
             b.push_default(StyleProperty::OverflowWrap(parley::style::OverflowWrap::BreakWord));
         }
         for ri in self.si0..self.si_end {
@@ -341,11 +347,12 @@ impl<'a> Para<'a> {
 
     /// Where an area paragraph's first row goes: no higher than one leading (plus paragraph
     /// spacing) below the previous paragraph's last line.
-    fn area_origin(&self, m: LineMetrics, flow: &Flow) -> f32 {
+    /// `first_ascent` is the ascent the shape's first row is fitted with.
+    fn area_origin(&self, m: LineMetrics, first_ascent: f32, flow: &Flow) -> f32 {
         let space_before = if flow.prev_baseline.is_some() { self.ps.space_before_pt * self.env.k } else { 0.0 };
         match (&self.env.area, flow.prev_baseline) {
             (Some(_), Some(b)) => b + m.leading + flow.pending_space + space_before,
-            (Some(a), None) => a.bounds[1] + m.ascent,
+            (Some(a), None) => a.bounds[1] + first_ascent,
             (None, _) => 0.0,
         }
     }
@@ -366,9 +373,15 @@ impl<'a> Para<'a> {
         // out taller than the row it was planned in and no second plan is needed.
         layout.break_all_lines(None);
         let m = area_metrics(layout, env.styles, &self.ps, env.k, self.first_style(), env.vertical);
-        let from = self.area_origin(m, flow);
+        // The shape's first line sits as a text box's does: the top of its tallest ascender at
+        // the top of the shape, not the font's full ascent (which put it about 0.24 em low).
+        let top_ascent = match flow.prev_baseline {
+            None if !env.vertical => layout.lines().next().and_then(|l| first_ascent(&l)).map_or(m.ascent, |fa| fa.min(m.ascent)),
+            _ => m.ascent,
+        };
+        let from = self.area_origin(m, top_ascent, flow);
         let first_px = self.first_style().size_pt * env.k;
-        break_area(layout, a, from, m, (self.indent_start, self.indent_end), first_px, self.break_scale, &self.area_budget)
+        break_area(layout, a, from, m, top_ascent, (self.indent_start, self.indent_end), first_px, self.break_scale, &self.area_budget)
     }
 
     /// The widths of the tabs on the broken lines of `layout`.
@@ -385,6 +398,14 @@ impl<'a> Para<'a> {
         let wide = if self.env.wraps { self.tab_px } else { 0.0 };
         let mut layout = self.shape(lcx, fcx, &vec![wide; self.tabs.len()]);
         let (mut slots, mut full) = self.break_lines(&mut layout, flow);
+        // Area type: a line still wider than its span holds a word no span of the shape holds
+        // (`break_area` moves or hides every other). Break such words at the span edge instead.
+        if self.env.area.is_some() && self.overflows_a_span(&layout, &slots) {
+            self.area_break_word.set(true);
+            self.area_budget.set(MAX_AREA_PASSES);
+            layout = self.shape(lcx, fcx, &vec![wide; self.tabs.len()]);
+            (slots, full) = self.break_lines(&mut layout, flow);
+        }
         if self.env.wraps
             && !self.tabs.is_empty()
             && let Some((settled, settled_slots, settled_full)) = self.settle_tabs(lcx, fcx, &layout, flow)
@@ -394,6 +415,14 @@ impl<'a> Para<'a> {
             full = settled_full;
         }
         (layout, slots, full)
+    }
+
+    /// Is some line of `layout`, less its trailing whitespace, wider than the area slot it is in?
+    fn overflows_a_span(&self, layout: &Layout<RunBrush>, slots: &[Slot]) -> bool {
+        layout.lines().zip(slots).any(|(l, s)| {
+            let m = l.metrics();
+            (m.advance - m.trailing_whitespace) * self.break_scale > s.width + 0.5
+        })
     }
 
     /// Re-breaks until the tab widths the layout gives agree with the ones it was shaped for.

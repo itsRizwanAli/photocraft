@@ -917,11 +917,17 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "New Type Layer",
             menu: &["Layer", "New"],
             shortcut: None,
-            params: r##"{"x":px,"y":px (baseline anchor of point text),"text":str,"box":[x,y,w,h]? (paragraph text),"name":str?,"align":"left|center|right|justify…"?,"orientation":"horizontal|vertical"="horizontal", …character keys: "font","size":pt=12,"color",…}"##,
+            params: r##"{"x":px,"y":px (baseline anchor of point text),"text":str,"box":[x,y,w,h]? (paragraph text),"shape":layerId? (area type in one step: the text wraps inside that shape layer's path, holes included),"name":str?,"align":"left|center|right|justify…"?,"orientation":"horizontal|vertical"="horizontal", …character keys: "font","size":pt=12,"color",…}"##,
             enabled: has_doc,
             journal: true,
             run: |s, p| {
                 let mut t = new_text_layer(s, p, "type.create")?;
+                // Area type in one step and one undo (type.create, then type.fillPath).
+                if p.get("shape").is_some_and(|v| !v.is_null()) {
+                    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+                    let source = crate::type_area_cmds::area_source(doc, p)?;
+                    crate::type_area_cmds::make_area(&mut t, &source)?;
+                }
                 let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| layer_name(&t.text));
                 let id = s.edit("New Type Layer", |doc, active| {
                     refresh(doc, &mut t);

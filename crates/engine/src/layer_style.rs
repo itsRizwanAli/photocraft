@@ -67,13 +67,58 @@ fn gradient_stops(p: &Value, from: Color, to: Color) -> Vec<(f32, Color)> {
     }
 }
 fn gradient(p: &Value) -> Gradient {
-    Gradient {
+    let mut g = Gradient {
         stops: gradient_stops(p, color(p, "from", [0.0; 3]), color(p, "to", [1.0; 3])),
         style: gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear")),
         angle: f(p, "angle", 90.0),
         scale: (f(p, "scale", 100.0) / 100.0).clamp(0.1, 1.5),
         reverse: b(p, "reverse", false),
         ..Gradient::default()
+    };
+    multi_stop(&mut g, p);
+    g
+}
+
+/// Most colour or opacity stops a style gradient takes, as Photoshop's Gradient Editor allows.
+const MAX_STYLE_STOPS: usize = 64;
+
+/// A style gradient's colour stops from `"stops":[[t 0..1, "#rrggbb"|[r,g,b]],…]` (at least
+/// two, sorted by location). `None` when absent or unusable.
+pub(crate) fn param_stops(p: &Value) -> Option<Vec<(f32, Color)>> {
+    let a = p.get("stops")?.as_array()?;
+    let mut stops: Vec<(f32, Color)> = a
+        .iter()
+        .take(MAX_STYLE_STOPS)
+        .filter_map(|s| {
+            let t = s.get(0)?.as_f64().filter(|t| t.is_finite())?.clamp(0.0, 1.0) as f32;
+            Some((t, color_of(&json!({"c": s.get(1)?}), "c")?))
+        })
+        .collect();
+    stops.sort_by(|x, y| x.0.total_cmp(&y.0));
+    (stops.len() >= 2).then_some(stops)
+}
+
+/// The parts of a style gradient past two end colours: `stops` (many colours), `opacityStops`
+/// (`[[t, 0..1],…]`, transparency), `offset` (`[x, y]` %, of the layer bounds) and `align` (with
+/// the layer). Each is written to the PSD's lfx2 Grad, so Photoshop opens the same gradient.
+fn multi_stop(g: &mut Gradient, p: &Value) {
+    if let Some(stops) = param_stops(p) {
+        g.stops = stops;
+    }
+    if let Some(a) = p.get("opacityStops").and_then(Value::as_array) {
+        let unit = |v: Option<&Value>| v.and_then(Value::as_f64).filter(|n| n.is_finite()).map(|n| n.clamp(0.0, 1.0) as f32);
+        let mut o: Vec<(f32, f32)> = a.iter().take(MAX_STYLE_STOPS).filter_map(|s| Some((unit(s.get(0))?, unit(s.get(1))?))).collect();
+        o.sort_by(|x, y| x.0.total_cmp(&y.0));
+        g.opacity_stops = o;
+    }
+    if let Some([x, y]) = p.get("offset").and_then(Value::as_array).and_then(|o| {
+        let n = |i: usize| o.get(i).and_then(Value::as_f64).filter(|n| n.is_finite()).map(|n| (n / 100.0).clamp(-10.0, 10.0) as f32);
+        Some([n(0)?, n(1)?])
+    }) {
+        g.offset = (x, y);
+    }
+    if let Some(a) = b_of(p, "align") {
+        g.align = a;
     }
 }
 
@@ -604,6 +649,7 @@ fn overlay_gradient(g: &mut Gradient, p: &Value) {
     if let Some(x) = b_of(p, "reverse") {
         g.reverse = x;
     }
+    multi_stop(g, p);
 }
 
 /// Applies the params present in `p` onto an existing effect, in the command's
@@ -708,7 +754,7 @@ fn overlay_stroke(s: &mut StrokeFx, p: &Value) {
         };
     }
     overlay_bool(p, "overprint", &mut s.overprint);
-    if p.get("from").is_some() {
+    if p.get("from").is_some() || param_stops(p).is_some() {
         s.paint = FxPaint::Gradient(gradient(p));
     } else if let Some(c) = color_of(p, "color") {
         s.paint = FxPaint::Color(c);
@@ -1062,13 +1108,13 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "stroke",
             "Stroke…",
-            r##"{"size":px=1,"position":"inside|outside|center","color":"#rrggbb","from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"?,"smoothness":0..100=100,"style":str,"angle":deg,"opacity":0..100,"blend":str,"overprint":bool,"add":bool}"##
+            r##"{"size":px=1,"position":"inside|outside|center","color":"#rrggbb","from":"#rrggbb","to":"#rrggbb","stops":[[t 0..1,"#rrggbb"],…]? (many colours; overrides from/to),"opacityStops":[[t,0..1],…]?,"offset":[x%,y%]?,"align":bool?,"method":"classic|perceptual|linear|smooth"?,"smoothness":0..100=100,"style":str,"angle":deg,"opacity":0..100,"blend":str,"overprint":bool,"add":bool}"##
         ),
         style_cmd!("colorOverlay", "Color Overlay…", r##"{"color":"#rrggbb","opacity":0..100=100,"blend":str,"add":bool}"##),
         style_cmd!(
             "gradientOverlay",
             "Gradient Overlay…",
-            r##"{"from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"? (Photoshop's interpolation; omitted on new effects: straight stops; edits retain the recorded method),"smoothness":0..100=100,"style":"linear|radial|angle|reflected|diamond","angle":deg=90,"scale":10..150=100,"reverse":bool,"opacity":0..100,"blend":str,"add":bool}"##
+            r##"{"from":"#rrggbb","to":"#rrggbb","stops":[[t 0..1,"#rrggbb"],…]? (many colours; overrides from/to),"opacityStops":[[t,0..1],…]?,"offset":[x%,y%]?,"align":bool?,"method":"classic|perceptual|linear|smooth"? (Photoshop's interpolation; omitted on new effects: straight stops; edits retain the recorded method),"smoothness":0..100=100,"style":"linear|radial|angle|reflected|diamond","angle":deg=90,"scale":10..150=100,"reverse":bool,"opacity":0..100,"blend":str,"add":bool}"##
         ),
         style_cmd!(
             "patternOverlay",

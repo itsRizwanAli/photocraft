@@ -27,6 +27,9 @@ thread_local! {
 struct AreaRows<'a> {
     area: &'a crate::area::AreaShape,
     m: LineMetrics,
+    /// Ascent the first row is fitted with: the tallest ascender of the first line for the first
+    /// paragraph (Photoshop's "first baseline: ascent", as box text), else `m.ascent`.
+    first_ascent: f32,
     min_width: f32,
     /// Where the search for the next row starts.
     next: f32,
@@ -38,7 +41,8 @@ impl AreaRows<'_> {
     /// Row `i`: its baseline and spans; `None` past the shape.
     fn get(&mut self, i: usize) -> Option<&(f32, Vec<(f32, f32)>)> {
         while self.rows.len() <= i && !self.done {
-            match self.area.next_row(self.next, self.m.ascent, self.m.descent, self.min_width) {
+            let ascent = if self.rows.is_empty() { self.first_ascent } else { self.m.ascent };
+            match self.area.next_row(self.next, ascent, self.m.descent, self.min_width) {
                 Some((b, spans)) if self.rows.len() < MAX_AREA_ROWS => {
                     self.next = b + self.m.leading;
                     self.rows.push((b, spans));
@@ -92,15 +96,16 @@ pub(super) fn break_area(
     area: &crate::area::AreaShape,
     from: f32,
     m: LineMetrics,
+    first_ascent: f32,
     indents: (f32, f32),
     min_width: f32,
     scale: f32,
     budget: &std::cell::Cell<usize>,
 ) -> (Vec<Slot>, bool) {
     let inset = indents.0 + indents.1;
-    let mut rows = AreaRows { area, m, min_width, next: from, rows: Vec::new(), done: false };
+    let mut rows = AreaRows { area, m, first_ascent, min_width, next: from, rows: Vec::new(), done: false };
     // Every row of the shape from its top, whatever paragraph came before (found lazily).
-    let mut shape_rows = AreaRows { area, m, min_width, next: area.bounds[1], rows: Vec::new(), done: false };
+    let mut shape_rows = AreaRows { area, m, first_ascent: m.ascent, min_width, next: area.bounds[1], rows: Vec::new(), done: false };
     let mut needs: Vec<Need> = Vec::new();
     loop {
         let (slots, overflow) = break_area_pass(layout, &mut rows, inset, scale, &needs);

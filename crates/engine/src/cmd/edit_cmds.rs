@@ -39,13 +39,21 @@ pub struct Clip {
 /// Photoshop's layer-based copy (CC 2018 on): with no selection, Copy takes the active layer
 /// whole when it is a smart object (#2428), a type or shape layer, or a group (its whole subtree)
 /// (#2670), so Paste recreates it instead of its pixels. Fill and adjustment layers have no
-/// pixels of their own, so they are taken whole too rather than refused (#2344). Pixel layers
-/// still copy their pixels; several selected layers are [`multi_copy_ids`].
+/// pixels of their own, so they are taken whole too rather than refused (#2344). A pixel layer
+/// with a layer or vector mask or layer effects is taken whole too, so Paste keeps them
+/// (UI-217-23); a plain pixel layer still copies its pixels. Several selected layers are
+/// [`multi_copy_ids`].
 fn takes_whole(d: &crate::DocState, id: LayerId) -> bool {
     d.doc.selection.is_none()
         && d.selected_layers().len() <= 1
         && crate::layer_copy_cmds::layered(d.doc.mode)
-        && d.doc.layer(id).is_some_and(|l| !matches!(l.content, LayerContent::Raster(_)))
+        && d.doc.layer(id).is_some_and(|l| !matches!(l.content, LayerContent::Raster(_)) || dresses_pixels(l))
+}
+
+/// Does a pixel layer carry anything beyond its pixels that a copy should keep: a layer or
+/// vector mask, or a layer effect that is on?
+fn dresses_pixels(l: &Layer) -> bool {
+    l.mask.is_some() || l.vector_mask.is_some() || l.effects.items.iter().any(photocraft_doc::effects::Effect::enabled)
 }
 
 /// A scratch document in the source's colour, to hold copied layers.

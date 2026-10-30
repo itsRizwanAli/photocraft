@@ -574,3 +574,38 @@ fn double_stroke_bands_render_and_survive_an_edit() {
     s.execute("layer.layerStyle.replace", json!({"layer": id.0, "effects": entries})).unwrap();
     assert_eq!(px(&mut s, 24, 14), before, "both strokes render identically after the round trip");
 }
+
+/// Multi-stop style gradients: many colours, transparency stops, offset and align, on Gradient
+/// Overlay and on a gradient Stroke, as Photoshop's Gradient Editor makes them.
+#[test]
+fn gradient_overlay_and_stroke_take_many_stops() {
+    let mut s = session();
+    let stops = json!([[0.0, "#ff0080"], [0.5, "#ffd000"], [1.0, "#00c0ff"]]);
+    s.execute(
+        "layer.layerStyle.gradientOverlay",
+        json!({"stops": stops, "opacityStops": [[0.0, 1.0], [1.0, 0.25]], "offset": [10, -20], "align": false, "style": "radial", "angle": 45}),
+    )
+    .unwrap();
+    let Effect::GradientOverlay { gradient: g, interpolation, .. } = &effects(&s)[0] else { panic!() };
+    assert_eq!(g.stops.len(), 3);
+    assert!((g.stops[1].0 - 0.5).abs() < 1e-6 && (g.stops[1].1.to_rgb()[1] - 208.0 / 255.0).abs() < 1e-3, "{:?}", g.stops);
+    assert_eq!(g.opacity_stops, vec![(0.0, 1.0), (1.0, 0.25)]);
+    assert!((g.offset.0 - 0.1).abs() < 1e-6 && (g.offset.1 + 0.2).abs() < 1e-6);
+    assert!(!g.align);
+    assert!(interpolation.is_none(), "the stop list is the curve");
+    // Editing only the angle keeps the stops.
+    s.execute("layer.layerStyle.gradientOverlay", json!({"angle": 10})).unwrap();
+    let Effect::GradientOverlay { gradient: g, .. } = &effects(&s)[0] else { panic!() };
+    assert_eq!((g.stops.len(), g.angle), (3, 10.0));
+    // Unusable stop lists fall back to from/to.
+    s.execute("layer.layerStyle.gradientOverlay", json!({"from": "#000000", "to": "#ffffff", "stops": [[0.0, "#ff0000"]], "add": true})).unwrap();
+    assert!(effects(&s).iter().any(|e| matches!(e, Effect::GradientOverlay { gradient, .. } if gradient.stops.len() == 2)));
+    // A gradient stroke from stops alone.
+    s.execute("layer.layerStyle.stroke", json!({"size": 4, "stops": stops})).unwrap();
+    let stroke = effects(&s).into_iter().find_map(|e| match e {
+        Effect::Stroke(st) => Some(st),
+        _ => None,
+    });
+    let Some(photocraft_doc::effects::FxPaint::Gradient(g)) = stroke.map(|st| st.paint) else { panic!("a gradient stroke") };
+    assert_eq!(g.stops.len(), 3);
+}
