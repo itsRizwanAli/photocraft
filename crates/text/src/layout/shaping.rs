@@ -10,8 +10,10 @@ use photocraft_doc::text::{CharStyle, ParagraphStyle, TextAlign, TextDirection};
 
 use super::area::{LineMetrics, MAX_AREA_PASSES, area_metrics, break_area};
 
-/// The part of a line's ascender height its area-type band starts at (see `break_lines`).
-pub(crate) const AREA_BAND_ASCENT: f32 = 0.95;
+/// The part of a line's ascender height its area-type band starts at (see `break_lines`): measured
+/// on Photoshop 2026, which fits a 28 pt Arial "Area" into the tip of an ellipse only below 0.945
+/// and puts its left edge where 0.90 does.
+pub(crate) const AREA_BAND_ASCENT: f32 = 0.90;
 use super::paragraphs::{TabWidth, strip_break, tab_widths};
 use super::style::{
     SYNTHETIC_SMALL_CAPS_SCALE, SmallCapsMode, drawn_style, effective_horizontal_scale, feature_list, first_ascent, hangul_runs, probe_smcp, small_caps_mode,
