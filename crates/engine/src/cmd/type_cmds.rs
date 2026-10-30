@@ -157,13 +157,18 @@ pub fn check_size_tracking(p: &Value) -> std::result::Result<(), String> {
 
 /// The PostScript name of the installed face of `family` at exactly `weight`/`italic`. A PSD names
 /// a type layer by PostScript name, and Photoshop treats a name no font has as missing (#3556).
-/// Only an exact face is named: layout picks a named face before weight and italic, so naming a
+/// Only an exact face is named (a single-face family aside, below): layout picks a named face before weight and italic, so naming a
 /// nearby face would override the requested weight (a variable font's axis, a weight between two
 /// faces) or italic. Without an exact face the style keeps no name and layout matches as before.
 fn installed_postscript(family: &str, weight: u16, italic: bool) -> Option<String> {
     let mut shared = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
     let faces = shared.fonts.faces(family);
-    let face = faces.iter().find(|f| f.italic == italic && f.weight.round() as u16 == weight)?;
+    // The exact face; else, for a family named the Windows way ("Segoe UI Semibold", "Arial
+    // Black"), which holds one face of the slant whose weight the style needn't share, that face:
+    // its real name opens in Photoshop where an invented "SegoeUISemibold-Regular" is missing.
+    let same: Vec<_> = faces.iter().filter(|f| f.italic == italic).collect();
+    let exact = same.iter().find(|f| f.weight.round() as u16 == weight).copied();
+    let face = exact.or_else(|| (same.len() == 1).then(|| same[0]))?;
     face.postscript_name.clone()
 }
 

@@ -50,6 +50,18 @@ fn a_family_font_gets_the_installed_postscript_name() {
     assert!(absent.postscript_name.is_none());
 }
 
+/// A family named the Windows way holds one face whose weight the style doesn't carry: the face's
+/// real PostScript name is stored, not an invented "SegoeUISemibold-Regular" Photoshop can't find.
+#[cfg(windows)]
+#[test]
+fn a_single_face_family_gets_its_face_postscript_name() {
+    let mut style = CharStyle::default();
+    apply_char_props(&mut style, &json!({"font": "Segoe UI Semibold"}));
+    if style.font_family == "Segoe UI Semibold" {
+        assert_eq!(style.postscript_name.as_deref(), Some("SegoeUI-Semibold"));
+    }
+}
+
 /// Picking a style or weight resets the weight axis to it; other axes keep their values (#2985).
 #[test]
 fn a_style_or_weight_resets_the_weight_axis() {
