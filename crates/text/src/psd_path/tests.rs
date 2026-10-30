@@ -332,3 +332,50 @@ fn an_area_layer_gets_a_box_frame() {
     update_frame(&mut entry, &TextShape::Area { path: square });
     assert_eq!(entry, box_frame(10.0, 20.0, 40.0, 60.0));
 }
+
+/// The area type frame of a Photoshop 2026 PSD (Type tool inside a 500×320 ellipse at (50, 40)):
+/// a box frame (kind 1) whose outline is the ellipse, from its first anchor, with `-3` flags.
+const AREA_ELLIPSE: &str = "<< /1 << /0 [ 50.0 200.0 50.0 111.63445 161.92882 40.0 300.0 40.0 300.0 40.0 438.07117 40.0 550.0 111.63445 550.0 200.0 550.0 200.0 550.0 288.36554 438.07117 360.0 300.0 360.0 300.0 360.0 161.92882 360.0 50.0 288.36554 50.0 200.0 ] >> /2 << /0 1 /2 [ 1.0 0.0 0.0 1.0 -50.0 -40.0 ] /6 [ -3.0 -3.0 ] /11 << /4 -3 /18 -3.0 /22 .025 >> >> >>";
+
+#[test]
+fn photoshop_area_frame_reads_as_its_closed_path_and_a_box_does_not() {
+    let area = read_area(&frame(AREA_ELLIPSE)).expect("area type");
+    assert!(area.closed && area.knots.len() == 4);
+    // Into text space through the frame matrix: the ellipse's box is (0, 0)..(500, 320).
+    let xs: Vec<f64> = area.knots.iter().map(|k| k.anchor.x).collect();
+    let ys: Vec<f64> = area.knots.iter().map(|k| k.anchor.y).collect();
+    assert!(xs.iter().any(|x| x.abs() < 1e-3) && xs.iter().any(|x| (x - 500.0).abs() < 1e-3), "{xs:?}");
+    assert!(ys.iter().any(|y| y.abs() < 1e-3) && ys.iter().any(|y| (y - 320.0).abs() < 1e-3), "{ys:?}");
+    // A rectangular text box is not area type, and neither is type on a path.
+    let b = box_frame(1.0, 2.0, 30.0, 40.0);
+    assert!(read_area(b.get("0").unwrap()).is_none());
+    assert!(read_area(&frame(CIRCLE)).is_none());
+}
+
+#[test]
+fn area_type_writes_photoshops_area_frame_and_reads_back() {
+    let ellipse = read_area(&frame(AREA_ELLIPSE)).unwrap();
+    let path = photocraft_doc::vector::Path::new(vec![ellipse.clone()]);
+    let mut entry = point_frame();
+    update_frame(&mut entry, &TextShape::Area { path: path.clone() });
+    let f = entry.get("0").unwrap();
+    assert_eq!(frame_kind(f), BOX_FRAME);
+    assert_eq!(f.path(&["2", "6"]).and_then(numbers), Some(vec![-3.0, -3.0]), "Photoshop's area flags");
+    assert_eq!(f.path(&["1", "0"]).and_then(numbers).map(|v| v.len()), Some(4 * 8), "four cubic segments");
+    let back = read_area(f).expect("reads back as area type");
+    assert!(read_area_matches(&back, &ellipse));
+    // Unchanged: the frame is left as it is.
+    let before = entry.clone();
+    update_frame(&mut entry, &TextShape::Area { path });
+    assert_eq!(entry, before);
+    // Leaving the area drops the area frame.
+    update_frame(&mut entry, &TextShape::Point);
+    assert_eq!(entry, point_frame());
+    // Holes (two pieces): a text box over the bounds, as before.
+    let hole = photocraft_doc::vector::Subpath::polygon(&[(200.0, 100.0), (300.0, 100.0), (300.0, 200.0), (200.0, 200.0)]);
+    let mut entry = point_frame();
+    update_frame(&mut entry, &TextShape::Area { path: photocraft_doc::vector::Path::new(vec![ellipse, hole]) });
+    let f = entry.get("0").unwrap();
+    assert_eq!(frame_kind(f), BOX_FRAME);
+    assert!(read_area(f).is_none(), "a plain box");
+}

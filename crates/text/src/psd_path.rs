@@ -256,13 +256,87 @@ fn box_frame(x: f64, y: f64, w: f64, h: f64) -> E {
     E::Dict(vec![("0".into(), E::Dict(vec![("1".into(), E::Dict(vec![("0".into(), E::Array(pts))])), ("2".into(), data)]))])
 }
 
+/// Area type's frame as Photoshop 2026 writes it (type set inside a closed path: a text box
+/// whose outline is the path, observed on a Photoshop-made ellipse): kind 1 like a box, the
+/// outline at `/1 /0` as cubic segments from the path's first anchor (no rotation, unlike type on
+/// a path), and `-3` where a rectangular box has `-2`. `path` is in text space, so the frame
+/// matrix is the identity. `None` for a path that isn't one closed piece.
+fn area_frame(path: &Subpath) -> Option<E> {
+    if !path.closed || path.knots.len() < 2 {
+        return None;
+    }
+    let segs = path.segments();
+    let pts: Vec<E> = segs.iter().flatten().flat_map(|p| [real(p.x), real(p.y)]).collect();
+    if pts.is_empty() || !segs.iter().flatten().all(|p| p.x.is_finite() && p.y.is_finite()) {
+        return None;
+    }
+    let kind = E::Dict(vec![("4".into(), E::Int(-3)), ("18".into(), real(-3.0)), ("22".into(), real(0.025))]);
+    let data = E::Dict(vec![
+        ("0".into(), E::Int(BOX_FRAME)),
+        ("2".into(), E::Array([1.0, 0.0, 0.0, 1.0, 0.0, 0.0].map(real).to_vec())),
+        ("6".into(), E::Array(vec![real(-3.0), real(-3.0)])),
+        ("11".into(), kind),
+    ]);
+    Some(E::Dict(vec![("0".into(), E::Dict(vec![("1".into(), E::Dict(vec![("0".into(), E::Array(pts))])), ("2".into(), data)]))]))
+}
+
+/// The closed path of an area type frame (a box frame whose outline isn't an axis-aligned
+/// rectangle), in the `TySh` text space; `None` for a plain text box or anything unreadable.
+pub(crate) fn read_area(frame: &E) -> Option<Subpath> {
+    if frame_kind(frame) != BOX_FRAME {
+        return None;
+    }
+    let path = read(frame).ok().filter(|p| p.closed)?;
+    let straight = |k: &Knot| same(k.anchor, k.in_ctrl) && same(k.anchor, k.out_ctrl);
+    let axis = path.knots.iter().zip(path.knots.iter().cycle().skip(1)).all(|(a, b)| (a.anchor.x - b.anchor.x).abs() <= SAME || (a.anchor.y - b.anchor.y).abs() <= SAME);
+    let rectangle = path.knots.len() == 4 && path.knots.iter().all(straight) && axis;
+    (!rectangle).then_some(path)
+}
+
 /// Brings the frame list entry `entry` (`<< /0 frame >>`) of a type layer up to date with its
 /// `shape`: type on a path gets a path frame for its path (left byte for byte when it already
-/// holds that path, e.g. Photoshop's own after an unedited save), and a layer no longer on a path
-/// loses its path frame (else it would reopen on the path).
+/// holds that path, e.g. Photoshop's own after an unedited save), area type an area frame with
+/// its outline, and a layer no longer on a path or in an area loses that frame (else it would
+/// reopen on the path or in the area).
 pub(crate) fn update_frame(entry: &mut E, shape: &TextShape) {
     let frame = entry.get("0");
     let kind = frame.map_or(0, frame_kind);
+    let area_outline = frame.and_then(read_area);
+    if let TextShape::Area { path } = shape {
+        // One closed piece is what Photoshop's area type holds; a path with holes or several
+        // pieces saves as a text box over its bounds (its EngineData says so too).
+        let single = match path.subpaths.as_slice() {
+            [only] => Some(only),
+            _ => None,
+        };
+        if let Some(sub) = single {
+            let unchanged = area_outline.as_ref().is_some_and(|p| p.knots.len() == sub.knots.len() && read_area_matches(p, sub));
+            if unchanged {
+                return;
+            }
+            if let Some(f) = area_frame(sub) {
+                *entry = f;
+                return;
+            }
+        }
+        *entry = match crate::area::path_bounds(path) {
+            Some((x0, y0, x1, y1)) => box_frame(x0, y0, x1 - x0, y1 - y0),
+            None => point_frame(),
+        };
+        return;
+    }
+    // A layer that left its area: drop the area frame like a path frame.
+    if area_outline.is_some() {
+        *entry = match shape {
+            TextShape::Box { x, y, width, height } => box_frame(f64::from(*x), f64::from(*y), f64::from(*width), f64::from(*height)),
+            TextShape::Point => point_frame(),
+            _ => entry.clone(),
+        };
+        if !matches!(shape, TextShape::Path { .. }) {
+            return;
+        }
+    }
+    let frame = entry.get("0");
     match shape {
         TextShape::Path { path, start, flip } => {
             let path = frame_path(path, *start, *flip);
@@ -290,14 +364,19 @@ pub(crate) fn update_frame(entry: &mut E, shape: &TextShape) {
         _ if kind != PATH_FRAME || frame.is_none_or(|f| read(f).is_err()) => {}
         TextShape::Box { x, y, width, height } => *entry = box_frame(f64::from(*x), f64::from(*y), f64::from(*width), f64::from(*height)),
         TextShape::Point => *entry = point_frame(),
-        // Area type saves as a text box over its path's bounds, as its EngineData does.
-        TextShape::Area { path } => {
-            *entry = match crate::area::path_bounds(path) {
-                Some((x0, y0, x1, y1)) => box_frame(x0, y0, x1 - x0, y1 - y0),
-                None => point_frame(),
-            }
-        }
+        // Handled above.
+        TextShape::Area { .. } => {}
     }
+}
+
+/// Whether the closed paths `a` and `b` are the same outline, whichever anchor each starts at
+/// (the reader starts a closed frame at its last anchor).
+fn read_area_matches(a: &Subpath, b: &Subpath) -> bool {
+    (0..a.knots.len()).any(|r| {
+        let mut knots = a.knots.clone();
+        knots.rotate_left(r);
+        same_path(&Subpath { closed: a.closed, knots, op: a.op }, b)
+    })
 }
 
 #[cfg(test)]

@@ -146,6 +146,17 @@ fn layer_frame<'a>(layer: &TextLayer, tysh: &[u8], txt2: &'a E, named: bool) -> 
 /// read: the layer then stays the box or point text EngineData describes.
 pub fn apply_txt2_path(layer: &mut TextLayer, tysh: &[u8], txt2: &E) -> Result<bool, String> {
     let Some((_, frame)) = layer_frame(layer, tysh, txt2, true) else { return Ok(false) };
+    // Area type: a box frame whose outline is the closed path the text wraps inside (EngineData
+    // only has the path's bounds as a text box).
+    if let Some(sub) = crate::psd_path::read_area(frame) {
+        let path = photocraft_doc::vector::Path::new(vec![sub]);
+        let vertical = layer.orientation == photocraft_doc::text::Orientation::Vertical;
+        if crate::area::AreaShape::new(&path, vertical).is_none() {
+            return Ok(false);
+        }
+        layer.shape = TextShape::Area { path };
+        return Ok(true);
+    }
     if crate::psd_path::frame_kind(frame) != crate::psd_path::PATH_FRAME {
         return Ok(false);
     }
@@ -163,8 +174,9 @@ pub fn apply_txt2_path(layer: &mut TextLayer, tysh: &[u8], txt2: &E) -> Result<b
 /// alignment anchor. Only when the layer's `TextIndex` entry still holds the layer's text, as
 /// for [`apply_txt2`], and the frame agrees with the `TySh` `bounds`.
 pub fn apply_txt2_frame(layer: &mut TextLayer, tysh: &[u8], txt2: &E) {
-    // Type on a path: [`apply_txt2_path`] already read the path through the frame's matrix.
-    if matches!(layer.shape, TextShape::Path { .. }) {
+    // Type on a path or in an area: [`apply_txt2_path`] already read the path through the
+    // frame's matrix.
+    if matches!(layer.shape, TextShape::Path { .. } | TextShape::Area { .. }) {
         return;
     }
     let Some((t, frame)) = layer_frame(layer, tysh, txt2, false) else { return };

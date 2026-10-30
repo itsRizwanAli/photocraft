@@ -497,9 +497,15 @@ impl Ex {
                 crate::vector_map::shape_blocks(sh, &mut raw, w, h, self.dpi);
             }
             LayerContent::Text(t) => {
-                if matches!(t.shape, photocraft_doc::text::TextShape::Area { .. }) {
-                    self.warnings
-                        .push(format!("layer \"{}\": area type is saved as paragraph text over its path's bounds (PSD area type is not written yet)", l.name));
+                // Photoshop's area type is one closed path; holes or several pieces can't be
+                // written, so such an area saves as paragraph text over its bounds.
+                if let photocraft_doc::text::TextShape::Area { path } = &t.shape
+                    && !matches!(path.subpaths.as_slice(), [only] if only.closed)
+                {
+                    self.warnings.push(format!(
+                        "layer \"{}\": area type with holes or several shapes is saved as paragraph text over its path's bounds (Photoshop area type is one closed path)",
+                        l.name
+                    ));
                 }
                 // Text layers without PSD data (created here) get a generated TySh.
                 let generated = t.psd_raw.is_none().then(|| std::sync::Arc::new(photocraft_text::psd::build_tysh(t, self.dpi, None)));

@@ -552,6 +552,20 @@ pub fn needs_txt2(objects: &[(i32, &TextLayer)]) -> bool {
 /// else the file's block held — the other keys beside the text objects, objects no layer names —
 /// is kept, and a block whose content comes out unchanged is returned byte for byte (#2374:
 /// Photoshop refused files whose `Txt2` an unedited save had stripped).
+/// A `Txt2` block Photoshop 2026 wrote (one area type object in an ellipse, Arial 28 pt), for
+/// documents made here that need frames.
+const PHOTOSHOP_TXT2: &[u8] = include_bytes!("photoshop_txt2.bin");
+
+/// [`PHOTOSHOP_TXT2`] with no text objects and no frames (its fonts, resources and settings
+/// kept), and its text object as the template new objects are built from.
+fn photoshop_block() -> Option<(E, E)> {
+    let mut block = parse_txt2(PHOTOSHOP_TXT2)?;
+    let template = block.path(&["1", "1"]).and_then(E::as_array).and_then(|a| a.first()).cloned()?;
+    block.get_mut("1")?.set("1", E::Array(Vec::new()));
+    block.get_mut("0")?.get_mut("8")?.set("0", E::Array(Vec::new()));
+    Some((block, template))
+}
+
 pub fn build_txt2(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>) -> Vec<u8> {
     build_txt2_at(objects, previous, 72.0)
 }
@@ -559,7 +573,14 @@ pub fn build_txt2(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>) -> Vec
 /// [`build_txt2`] for a document of `dpi` (the style runs of new and edited objects carry sizes
 /// in the document's points, as EngineData does).
 pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi: f32) -> Vec<u8> {
-    let prev = previous.and_then(parse_txt2);
+    // A document made here has no block to build on. Type on a path and area type need real
+    // objects drawn in frames (the stubs written otherwise can't name one), so they start from
+    // a block Photoshop wrote, emptied of its text (see [`photoshop_block`]).
+    let shaped = objects.iter().any(|(_, l)| matches!(l.shape, TextShape::Path { .. } | TextShape::Area { .. }));
+    let (prev, builtin_template) = match previous {
+        None if shaped => photoshop_block().map_or((None, None), |(b, t)| (Some(b), Some(t))),
+        _ => (previous.and_then(parse_txt2), None),
+    };
     let prev_objects: &[E] = prev.as_ref().and_then(|p| p.path(&["1", "1"]).and_then(E::as_array)).unwrap_or(&[]);
     let mut slots: Vec<E> = prev_objects.to_vec();
     // The older Photoshop's objects (#6971): named keys at `/DocumentObjects /TextObjects`
@@ -580,7 +601,7 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
     // a pass over all of them for every type layer.
     let all_stubs = prev_objects.iter().all(is_stub);
     // A template is copied once per new layer, so a large one is skipped (the stub is written).
-    let template = prev_objects.iter().rev().find(|o| names_one_frame(o) && fits(o, &mut { TEMPLATE_NODES }) && edited_object(o, "\r").is_some());
+    let template = prev_objects.iter().rev().find(|o| names_one_frame(o) && fits(o, &mut { TEMPLATE_NODES }) && edited_object(o, "\r").is_some()).or(builtin_template.as_ref());
     // The frame each written object is drawn in, with its layer's shape (type on a path lives
     // only in the frame, #7962).
     let mut frame_shapes: Vec<(usize, &TextShape)> = Vec::new();
@@ -709,6 +730,15 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
     // The outer dictionary keeps whatever the block held (`/98` version, block extras, …), and
     // `/1` whatever it holds beside the text objects.
     let mut outer = prev.clone().unwrap_or_else(|| E::Dict(vec![("98".into(), E::Dict(vec![("0".into(), E::Int(14))])), ("0".into(), E::dict())]));
+    // Type on a path and area type live only in their frame: a block without a frame list (a
+    // document made here) gets one, or Photoshop would open them as point or box text.
+    let needs_frames = frame_shapes.iter().any(|(_, s)| matches!(s, TextShape::Path { .. } | TextShape::Area { .. }));
+    if needs_frames
+        && let Some(resources @ E::Dict(_)) = outer.get_mut("0")
+        && resources.get("8").is_none()
+    {
+        resources.set("8", E::Dict(vec![("0".into(), E::Array(Vec::new()))]));
+    }
     pad_frames(&mut outer, slots.len().max(frames_needed));
     // A path layer's frame holds its path; a layer taken off its path loses its path frame. An
     // unchanged path leaves the file's frame as it was, and so does a frame the file already had
@@ -862,8 +892,8 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
         // keeps it as point text, one line for readers (and files) without that frame.
         TextShape::Point | TextShape::Path { .. } => (0, None),
         TextShape::Box { x, y, width, height } => (1, Some([*x, *y, x + width, y + height])),
-        // PSD area type is not written yet: the layer saves as paragraph text over the path's
-        // bounds, so Photoshop opens it with the same text wrapping in a rectangle.
+        // Area type: EngineData describes a text box over the path's bounds, as Photoshop
+        // writes it; the path itself goes into the layer's `Txt2` frame (`psd_path`).
         TextShape::Area { path } => match crate::area::path_bounds(path) {
             Some((x0, y0, x1, y1)) => (1, Some([x0 as f32, y0 as f32, x1 as f32, y1 as f32])),
             None => (0, None),

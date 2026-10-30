@@ -316,6 +316,58 @@ fn created_text_layer_roundtrips_through_psd() {
     assert!(bt.cache.as_ref().is_some_and(|c| c.content_bounds().width() > 10));
 }
 
+/// Area type made in PhotoCraft (a new document, no PSD data) saves as Photoshop's area type:
+/// the layer's `Txt2` frame holds the ellipse it wraps inside, so it opens as area type again
+/// (and in Photoshop), not as a text box over the ellipse's bounds.
+#[test]
+fn created_area_type_roundtrips_through_psd() {
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::text::{CharStyle, ParagraphRun, TextRun, TextShape};
+    use photocraft_doc::vector::{Knot, Path as VPath, PathOp, Subpath};
+    use photocraft_doc::{Document, Size, TextLayer};
+    use photocraft_geom::Point;
+    let mut doc = Document::new("a", Size::new(600, 400), ColorMode::Rgb, SampleType::U8);
+    let (cx, cy, rx, ry) = (300.0, 200.0, 250.0, 160.0);
+    let (kx, ky) = (0.552_284_75 * rx, 0.552_284_75 * ry);
+    let p = Point::new;
+    let k = |a: Point, i: Point, o: Point| Knot { anchor: a, in_ctrl: i, out_ctrl: o, smooth: true };
+    let ellipse = Subpath {
+        closed: true,
+        knots: vec![
+            k(p(cx - rx, cy), p(cx - rx, cy + ky), p(cx - rx, cy - ky)),
+            k(p(cx, cy - ry), p(cx - kx, cy - ry), p(cx + kx, cy - ry)),
+            k(p(cx + rx, cy), p(cx + rx, cy - ky), p(cx + rx, cy + ky)),
+            k(p(cx, cy + ry), p(cx + kx, cy + ry), p(cx - kx, cy + ry)),
+        ],
+        op: PathOp::Combine,
+    };
+    let text = "Area type inside an ellipse wraps along the curve on both sides from top to bottom.".to_string();
+    let style = CharStyle { font_family: "Inter".into(), size_pt: 28.0, ..Default::default() };
+    let mut t = TextLayer {
+        runs: vec![TextRun { len: text.len(), style }],
+        paragraphs: vec![ParagraphRun { len: text.len(), style: Default::default() }],
+        text,
+        shape: TextShape::Area { path: VPath::new(vec![ellipse.clone()]) },
+        ..Default::default()
+    };
+    t.sync_summary();
+    photocraft_text::TextEngine::new().render_layer(&mut t, doc.resolution_dpi, doc.pixel_format());
+    doc.layers.push(photocraft_doc::Layer::new("area", LayerContent::Text(t.clone())));
+    let out = photocraft_io::export(&doc, "a.psd", &Default::default()).unwrap();
+    assert!(!out.warnings.iter().any(|w| w.contains("area type")), "{:?}", out.warnings);
+    let back = photocraft_io::import("a.psd", &out.bytes).unwrap().document;
+    let LayerContent::Text(bt) = &back.layers[0].content else { panic!("not text") };
+    assert_eq!(bt.text, t.text);
+    let TextShape::Area { path } = &bt.shape else { panic!("not area type: {:?}", bt.shape) };
+    let [sub] = path.subpaths.as_slice() else { panic!("one piece: {path:?}") };
+    assert!(sub.closed && sub.knots.len() == 4);
+    let mut got: Vec<(i64, i64)> = sub.knots.iter().map(|k| bt.transform.apply(k.anchor)).map(|q| (q.x.round() as i64, q.y.round() as i64)).collect();
+    let mut want: Vec<(i64, i64)> = ellipse.knots.iter().map(|k| (k.anchor.x.round() as i64, k.anchor.y.round() as i64)).collect();
+    got.sort();
+    want.sort();
+    assert_eq!(got, want, "the ellipse's anchors in the document");
+}
+
 /// Review of #8888: the older Photoshop's text objects (`/DocumentObjects /TextObjects`) in the
 /// real psd-tools `text.psd`. Saving the type layer unedited leaves them (and the font list they
 /// index) exactly as the file has them; editing only the size changes the size of the legacy style
